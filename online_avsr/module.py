@@ -8,6 +8,7 @@ from torchaudio.models import RNNTBeamSearch
 
 from . import EXPECTED_SPM_VOCAB_SIZE
 from .models import audio_resnet, emformer_rnnt, fusion_module, video_resnet
+from .schedulers import WarmupCosineScheduler
 from .text import post_process_hypotheses
 
 
@@ -26,13 +27,22 @@ class OnlineAVSRModule(LightningModule):
                 f"Expected SentencePiece vocab size {EXPECTED_SPM_VOCAB_SIZE}, got {vocab_size}"
             )
         self.blank_idx = vocab_size
+        self.segment_length = int(getattr(args, "segment_length", 64) or 64)
+        self.right_context_length = int(getattr(args, "right_context_length", 0) or 0)
         self.audio_frontend = audio_resnet()
         self.video_frontend = video_resnet()
         self.fusion = fusion_module()
-        self.model = emformer_rnnt()
+        self.model = emformer_rnnt(
+            segment_length=self.segment_length,
+            right_context_length=self.right_context_length,
+        )
         self.loss = torchaudio.transforms.RNNTLoss(reduction="sum")
-        lr = float(getattr(args, "learning_rate", 8e-4))
-        self.optimizer = torch.optim.AdamW(
+        self._decoder = None
+
+    def configure_optimizers(self):
+        args = self.args
+        lr = float(getattr(args, "learning_rate", 8e-4) or 8e-4)
+        optimizer = torch.optim.AdamW(
             itertools.chain(
                 self.model.parameters(),
                 self.video_frontend.parameters(),
@@ -43,9 +53,21 @@ class OnlineAVSRModule(LightningModule):
             weight_decay=0.06,
             betas=(0.9, 0.98),
         )
+        warmup_epochs = int(getattr(args, "warmup_epochs", 10) or 10)
+        total_epochs = int(getattr(args, "epochs", 55) or 55)
+        steps_per_epoch = (
+            len(self.trainer.datamodule.train_dataloader())
+            / self.trainer.num_devices
+            / self.trainer.num_nodes
+        )
+        scheduler = WarmupCosineScheduler(optimizer, warmup_epochs, total_epochs, steps_per_epoch)
+        return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
 
-    def configure_optimizers(self):
-        return self.optimizer
+    @property
+    def decoder(self) -> RNNTBeamSearch:
+        if self._decoder is None:
+            self._decoder = RNNTBeamSearch(self.model, self.blank_idx)
+        return self._decoder
 
     def encode_av(self, audios, videos):
         video_features = self.video_frontend(videos)
@@ -56,6 +78,20 @@ class OnlineAVSRModule(LightningModule):
         video_features = video_features[:, :length]
         audio_features = audio_features[:, :length]
         fused = self.fusion(torch.cat([video_features, audio_features], dim=-1))
+        return fused
+
+    @torch.inference_mode()
+    def encode_chunk(self, audio_chunk, video_chunk, context_frames: int = 0):
+        """Encode one streaming chunk, dropping the leading context frames.
+
+        The chunk should arrive with context_frames of past frames prepended
+        (frontend receptive field); the corresponding fused frames are
+        trimmed so Emformer.infer sees exactly the new segment (+ any right
+        context included in the chunk).
+        """
+        fused = self.encode_av(audio_chunk, video_chunk)
+        if context_frames > 0:
+            fused = fused[:, context_frames:]
         return fused
 
     def _step(self, batch, step_type):
@@ -83,17 +119,17 @@ class OnlineAVSRModule(LightningModule):
         return self._step(batch, "val")
 
     def forward(self, batch, beam_width=20):
-        decoder = RNNTBeamSearch(self.model, self.blank_idx)
         fused = self.encode_av(batch.audios.to(self.device), batch.videos.to(self.device))
         lengths = torch.minimum(batch.audio_lengths, batch.video_lengths).to(self.device)
-        hypotheses = decoder(fused, lengths, beam_width=beam_width)
+        hypotheses = self.decoder(fused, lengths, beam_width=beam_width)
         return post_process_hypotheses(hypotheses, self.sp_model)[0][0]
 
-    def stream_step(self, audio_chunk, video_chunk, state=None, hypothesis=None, beam_width=20):
-        decoder = RNNTBeamSearch(self.model, self.blank_idx)
-        fused = self.encode_av(audio_chunk.to(self.device), video_chunk.to(self.device))
+    def stream_step(self, audio_chunk, video_chunk, state=None, hypothesis=None, beam_width=20, context_frames=0):
+        fused = self.encode_chunk(
+            audio_chunk.to(self.device), video_chunk.to(self.device), context_frames=context_frames
+        )
         length = torch.tensor(fused.size(1), device=self.device, dtype=torch.int32)
-        hypotheses, state = decoder.infer(
+        hypotheses, state = self.decoder.infer(
             fused.squeeze(0),
             length,
             beam_width=beam_width,

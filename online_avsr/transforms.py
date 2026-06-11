@@ -36,6 +36,9 @@ class AdaptiveTimeMask(torch.nn.Module):
 
 
 class VideoTransform:
+    """subset: "train" (augment), "test" (center crop), "roi" (pre-cropped
+    mouth-ROI input of any resolution -- resize to 88, no crop)."""
+
     def __init__(self, subset):
         if subset == "train":
             self.pipeline = torch.nn.Sequential(
@@ -44,6 +47,17 @@ class VideoTransform:
                 torchvision.transforms.RandomHorizontalFlip(0.5),
                 torchvision.transforms.Grayscale(),
                 AdaptiveTimeMask(10, 25),
+                torchvision.transforms.Normalize(0.421, 0.165),
+            )
+        elif subset == "roi":
+            self.pipeline = torch.nn.Sequential(
+                FunctionalModule(lambda x: x / 255.0),
+                FunctionalModule(
+                    lambda x: x
+                    if x.shape[-2:] == (88, 88)
+                    else torch.nn.functional.interpolate(x, size=(88, 88), mode="bilinear", align_corners=False)
+                ),
+                torchvision.transforms.Grayscale(),
                 torchvision.transforms.Normalize(0.421, 0.165),
             )
         else:
