@@ -127,7 +127,7 @@ class OnlineAVSRModule(LightningModule):
         fused = self.encode_av(batch.audios, batch.videos)
         feature_lengths = torch.minimum(batch.audio_lengths, batch.video_lengths).to(device=self.device, dtype=torch.int32)
         output, src_lengths, _, _ = self.model(
-            fused,
+            self._pad_right_context(fused),
             feature_lengths,
             prepended_targets,
             prepended_target_lengths,
@@ -142,10 +142,18 @@ class OnlineAVSRModule(LightningModule):
     def validation_step(self, batch, batch_idx):
         return self._step(batch, "val")
 
+    def _pad_right_context(self, fused):
+        """Emformer's non-streaming forward expects utterances right-padded
+        with right_context_length extra frames and emits T outputs for a
+        T+rc input; zero-pad so every fused frame is supervised/decoded."""
+        if self.right_context_length > 0:
+            fused = torch.nn.functional.pad(fused, (0, 0, 0, self.right_context_length))
+        return fused
+
     def forward(self, batch, beam_width=20):
         fused = self.encode_av(batch.audios.to(self.device), batch.videos.to(self.device))
         lengths = torch.minimum(batch.audio_lengths, batch.video_lengths).to(self.device)
-        hypotheses = self.decoder(fused, lengths, beam_width=beam_width)
+        hypotheses = self.decoder(self._pad_right_context(fused), lengths, beam_width=beam_width)
         return post_process_hypotheses(hypotheses, self.sp_model)[0][0]
 
     def stream_step(self, audio_chunk, video_chunk, state=None, hypothesis=None, beam_width=20, context_frames=0):

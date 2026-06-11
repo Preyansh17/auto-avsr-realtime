@@ -17,6 +17,7 @@ dependencies = [
     "scikit-image>=0.22",
     "av>=12",
     "numpy",
+    "soundfile>=0.14.0",
 ]
 
 [tool.uv]

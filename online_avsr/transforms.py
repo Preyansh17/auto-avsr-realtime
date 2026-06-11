@@ -37,9 +37,12 @@ class AdaptiveTimeMask(torch.nn.Module):
 
 class VideoTransform:
     """subset: "train" (augment), "test" (center crop), "roi" (pre-cropped
-    mouth-ROI input of any resolution -- resize to 88, no crop)."""
+    mouth-ROI input of any resolution -- resize to 88, no crop).
 
-    def __init__(self, subset):
+    frame_size: model input resolution appended as a final resize when it
+    differs from 88 (the device architecture consumes 44x44 frames)."""
+
+    def __init__(self, subset, frame_size=88):
         if subset == "train":
             self.pipeline = torch.nn.Sequential(
                 FunctionalModule(lambda x: x / 255.0),
@@ -66,6 +69,15 @@ class VideoTransform:
                 torchvision.transforms.CenterCrop(88),
                 torchvision.transforms.Grayscale(),
                 torchvision.transforms.Normalize(0.421, 0.165),
+            )
+        if frame_size != 88:
+            self.pipeline = torch.nn.Sequential(
+                self.pipeline,
+                FunctionalModule(
+                    lambda x: torch.nn.functional.interpolate(
+                        x, size=(frame_size, frame_size), mode="bilinear", align_corners=False
+                    )
+                ),
             )
 
     def __call__(self, video):
