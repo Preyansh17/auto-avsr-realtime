@@ -32,31 +32,11 @@ from online_avsr.streaming import (  # noqa: E402
     iter_av_windows,
     load_eager_pipeline,
     load_jit_pipeline,
+    load_media_file,
 )
 from online_avsr.text import compute_wer  # noqa: E402
 
 DEFAULT_SP_MODEL = os.path.join(PROJECT_ROOT, "spm", "spm_unigram_1023.model")
-
-
-def load_media(video_path):
-    """Return (video THWC uint8 numpy, audio (N,1) float 16kHz mono, fps)."""
-    import torchaudio
-    import torchvision
-
-    vframes, aframes, info = torchvision.io.read_video(video_path, pts_unit="sec", output_format="THWC")
-    fps = float(info.get("video_fps") or 25.0)
-
-    if aframes.numel() > 0:
-        audio, sample_rate = aframes.float(), int(info["audio_fps"])
-    else:
-        wav_path = os.path.splitext(video_path)[0] + ".wav"
-        if not os.path.isfile(wav_path):
-            raise FileNotFoundError(f"{video_path} has no audio track and no sibling wav: {wav_path}")
-        audio, sample_rate = torchaudio.load(wav_path, normalize=True)
-    if sample_rate != 16000:
-        audio = torchaudio.functional.resample(audio, sample_rate, 16000)
-    audio = audio.mean(dim=0, keepdim=True).transpose(1, 0)  # (N, 1)
-    return vframes.numpy(), audio, fps
 
 
 def resolve_assets(args):
@@ -148,7 +128,7 @@ def main():
             f"(arch={arch}, segment={backend.segment_length}, rc={backend.right_context_length})"
         )
 
-    video, audio, fps = load_media(args.video)
+    video, audio, fps = load_media_file(args.video)
     total_frames = min(len(video), audio.size(0) // RATE_RATIO)
     media_duration = total_frames / fps
     if not 24 <= fps <= 30:

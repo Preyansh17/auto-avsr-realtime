@@ -18,6 +18,33 @@ from .transforms import VideoTransform
 RATE_RATIO = 640  # 16 kHz audio samples per 25 fps video frame
 
 
+def load_media_file(video_path: str):
+    """Return (video THWC uint8 numpy, audio (N,1) float 16 kHz mono, fps).
+
+    Audio comes from the container's track, or a sibling .wav when absent
+    (the patient mouth-ROI mp4s store audio separately).
+    """
+    import os
+
+    import torchaudio
+    import torchvision.io
+
+    vframes, aframes, info = torchvision.io.read_video(video_path, pts_unit="sec", output_format="THWC")
+    fps = float(info.get("video_fps") or 25.0)
+
+    if aframes.numel() > 0:
+        audio, sample_rate = aframes.float(), int(info["audio_fps"])
+    else:
+        wav_path = os.path.splitext(video_path)[0] + ".wav"
+        if not os.path.isfile(wav_path):
+            raise FileNotFoundError(f"{video_path} has no audio track and no sibling wav: {wav_path}")
+        audio, sample_rate = torchaudio.load(wav_path, normalize=True)
+    if sample_rate != 16000:
+        audio = torchaudio.functional.resample(audio, sample_rate, 16000)
+    audio = audio.mean(dim=0, keepdim=True).transpose(1, 0)  # (N, 1)
+    return vframes.numpy(), audio, fps
+
+
 class SentencePieceTokenProcessor:
     """Token-id list -> text, keeping the leading word boundary (tutorial-style)."""
 
