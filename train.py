@@ -18,6 +18,8 @@ import sys
 import time
 from typing import Dict, Optional
 
+import torch
+
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
@@ -29,6 +31,7 @@ from online_avsr.checkpoint import (  # noqa: E402
     sha256_file,
 )
 from online_avsr.data_module import PatientAVDataModule  # noqa: E402
+from online_avsr.lora import SCOPE_PREFIXES, inject_lora, merge_lora  # noqa: E402
 from online_avsr.module import OnlineAVSRModule  # noqa: E402
 from online_avsr.patient_dataset import discover_patient_records  # noqa: E402
 from online_avsr.text import (  # noqa: E402
@@ -143,6 +146,13 @@ def parse_args():
     parser.add_argument("--pretrained-model-path", default=os.environ.get("PRETRAINED_MODEL_PATH") or None)
     parser.add_argument("--ensemble-last", type=int, default=10,
                         help="Average the last N epoch checkpoints after training (0 to disable)")
+    parser.add_argument("--lora", action="store_true",
+                        help="Freeze the pretrained weights and train low-rank adapters only")
+    parser.add_argument("--lora-r", type=int, default=8)
+    parser.add_argument("--lora-alpha", type=int, default=16)
+    parser.add_argument("--lora-dropout", type=float, default=0.05)
+    parser.add_argument("--lora-scopes", nargs="+", default=["encoder", "predictor", "joiner", "fusion"],
+                        choices=sorted(SCOPE_PREFIXES) + ["all"])
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -160,6 +170,8 @@ def main():
                 f"{args.pretrained_model_path} not found; run scripts/download_assets.py "
                 "then scripts/bootstrap_from_jit.py"
             )
+    if args.lora and not args.pretrained_model_path:
+        raise SystemExit("--lora requires pretrained weights (--model-source bootstrap or --pretrained-model-path)")
 
     env = preflight_environment()
     train_file = resolve_label_file(args.root_dir, args.train_file)
@@ -195,6 +207,13 @@ def main():
         "precision": args.precision,
         "learning_rate": args.learning_rate,
         "max_frames": args.max_frames,
+        "lora": {
+            "enabled": args.lora,
+            "r": args.lora_r,
+            "alpha": args.lora_alpha,
+            "dropout": args.lora_dropout,
+            "scopes": args.lora_scopes,
+        } if args.lora else {"enabled": False},
     }
     write_manifest(os.path.join(run_dir, "run_manifest.json"), manifest)
 
@@ -221,13 +240,28 @@ def main():
         print(f"Loaded pretrained initialization. missing={len(missing)} unexpected={len(unexpected)}")
         if len(missing) > 10:
             print(f"WARNING: many missing keys; check --architecture. First few: {list(missing)[:5]}")
+    if args.lora:
+        replaced, trainable, total = inject_lora(
+            model, args.lora_scopes, r=args.lora_r, alpha=args.lora_alpha, dropout=args.lora_dropout
+        )
+        print(f"LoRA: wrapped {replaced} Linear layers; trainable {trainable / 1e6:.2f}M "
+              f"of {total / 1e6:.2f}M params ({trainable / total:.1%})")
 
     trainer = build_trainer(args, run_dir)
     trainer.fit(model, datamodule=data_module, ckpt_path=args.resume_from_checkpoint)
 
-    if args.ensemble_last and trainer.is_global_zero:
-        avg_path = ensemble(run_dir, last_n=args.ensemble_last)
-        print(f"Averaged checkpoint: {avg_path}" if avg_path else "Too few checkpoints to average.")
+    if trainer.is_global_zero:
+        if args.lora:
+            # Fold adapters into plain Linear weights -> standard checkpoint
+            # for eval.py / demo_realtime.py (last.ckpt keeps the LoRA form
+            # for resuming).
+            merged = merge_lora(model)
+            merged_path = os.path.join(run_dir, "model_lora_merged.pth")
+            torch.save({"state_dict": model.state_dict(), "lora": manifest["lora"]}, merged_path)
+            print(f"Merged {merged} LoRA layers -> {merged_path}")
+        elif args.ensemble_last:
+            avg_path = ensemble(run_dir, last_n=args.ensemble_last)
+            print(f"Averaged checkpoint: {avg_path}" if avg_path else "Too few checkpoints to average.")
     print(f"Training complete. Run directory: {run_dir}")
 
 

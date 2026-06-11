@@ -89,6 +89,19 @@ overall RTF ≈ 0.2, algorithmic latency = (segment + right context)/25 fps = 1.
      --precision bf16-mixed --batch-size 2 --accumulate-grad-batches 4
    ```
    On the cluster: `sbatch slurm/train_realtime_finetune.sbatch` (paths/epochs via env vars).
+
+   **LoRA variant** — freeze the pretrained weights and train low-rank adapters only
+   (~2.4% of parameters with the defaults; good for small patient sets):
+   ```bash
+   python train.py --model-source bootstrap --lora \
+     --lora-r 8 --lora-alpha 16 --lora-scopes encoder predictor joiner fusion \
+     --root-dir /path/to/patient_data \
+     --train-file labels/train_spm1023.csv --val-file labels/val_spm1023.csv
+   ```
+   Cluster: `sbatch slurm/train_realtime_lora.sbatch`. The run directory gets
+   `model_lora_merged.pth` (adapters folded back into plain weights) which eval.py and
+   demo_realtime.py consume directly; `last.ckpt` keeps the LoRA form for resuming.
+   Scopes: `encoder` (Emformer), `predictor`, `joiner`, `fusion`, `video_frontend`, or `all`.
 3. **Evaluate** (streaming WER + RTF, or offline utterance mode):
    ```bash
    python eval.py --checkpoint exp/run/last.ckpt --mode streaming \

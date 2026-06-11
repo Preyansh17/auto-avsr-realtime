@@ -61,18 +61,22 @@ class OnlineAVSRModule(LightningModule):
                 right_context_length=self.right_context_length,
             )
         self.loss = torchaudio.transforms.RNNTLoss(reduction="sum")
-        self._decoder = None
 
     def configure_optimizers(self):
         args = self.args
         lr = float(getattr(args, "learning_rate", 8e-4) or 8e-4)
-        optimizer = torch.optim.AdamW(
-            itertools.chain(
+        trainable = [
+            p
+            for p in itertools.chain(
                 self.model.parameters(),
                 self.video_frontend.parameters(),
                 self.audio_frontend.parameters(),
                 self.fusion.parameters(),
-            ),
+            )
+            if p.requires_grad  # LoRA fine-tunes freeze everything but the adapters
+        ]
+        optimizer = torch.optim.AdamW(
+            trainable,
             lr=lr,
             weight_decay=0.06,
             betas=(0.9, 0.98),
@@ -89,9 +93,14 @@ class OnlineAVSRModule(LightningModule):
 
     @property
     def decoder(self) -> RNNTBeamSearch:
-        if self._decoder is None:
-            self._decoder = RNNTBeamSearch(self.model, self.blank_idx)
-        return self._decoder
+        # Stored outside nn.Module attribute handling: RNNTBeamSearch wraps
+        # self.model, and registering it as a submodule would duplicate every
+        # RNN-T weight in state_dict (as _decoder.model.*).
+        decoder = self.__dict__.get("_decoder_obj")
+        if decoder is None:
+            decoder = RNNTBeamSearch(self.model, self.blank_idx)
+            object.__setattr__(self, "_decoder_obj", decoder)
+        return decoder
 
     def encode_av(self, audios, videos):
         video_features = self.video_frontend(videos)
