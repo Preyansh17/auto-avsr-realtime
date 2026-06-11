@@ -1,0 +1,8 @@
+defaults:
+  - _self_
+root_dir: /scratch/th3482/LipVideoData/patient_25p_crops
+label_dir: "labels"
+train_file: "patient_retinaface_train_transcript_lengths_seg24s.csv"
+val_file: "patient_retinaface_val_transcript_lengths_seg24s.csv"
+test_file: "patient_retinaface_val_transcript_lengths_seg24s.csv"
+

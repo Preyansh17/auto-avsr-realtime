@@ -1,0 +1,12 @@
+*.pth
+*.pyc
+*.backup
+*.jsonl
+.history/*
+*.log
+*.wandb
+wandb/*
+*.json
+*.wav
+
+demo_videos/*

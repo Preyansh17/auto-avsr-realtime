@@ -1,0 +1,9 @@
+defaults:
+  - _self_
+root_dir: /scratch/th3482/LipVideoData/patient_25p_crops
+label_dir: "labels"
+# Default to mediapipe split; change to retinaface_* if needed
+train_file: "patient_mediapipe_train_transcript_lengths_seg24s.csv"
+val_file: "patient_mediapipe_val_transcript_lengths_seg24s.csv"
+test_file: "patient_mediapipe_val_transcript_lengths_seg24s.csv"
+
