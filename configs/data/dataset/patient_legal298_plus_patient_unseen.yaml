@@ -1,7 +1,0 @@
-defaults:
-  - _self_
-root_dir: /scratch/th3482/LipVideoData/patient_legal298_plus_patient_unseen_crops
-label_dir: "labels"
-train_file: "patient_retinaface_train_transcript_lengths_seg24s_legal298_plus_unseen.csv"
-val_file: "patient_retinaface_val_transcript_lengths_seg24s_legal298_plus_unseen.csv"
-test_file: "patient_retinaface_val_transcript_lengths_seg24s_legal298_plus_unseen.csv"

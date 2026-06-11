@@ -1,8 +1,0 @@
-defaults:
-  - _self_
-root_dir: /scratch/th3482/LipVideoData/video_300_25p_crops
-label_dir: "labels"
-train_file: "video300_mediapipe_train_transcript_lengths_seg24s.csv"
-val_file: "video300_mediapipe_val_transcript_lengths_seg24s.csv"
-test_file: "video300_mediapipe_test_transcript_lengths_seg24s.csv"
-

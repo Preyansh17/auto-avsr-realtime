@@ -10,3 +10,12 @@ wandb/*
 *.wav
 
 demo_videos/*
+
+# auto-avsr-realtime
+.venv/
+__pycache__/
+cpts/
+exp/
+outputs/
+*.ckpt
+*.pt

@@ -1,0 +1,22 @@
+[project]
+name = "auto-avsr-realtime"
+version = "0.1.0"
+description = "Real-time (streaming) audio-visual speech recognition with Emformer RNN-T, forked from auto-avsr"
+# mediapipe has no cp313 wheels yet; torchaudio RNNT APIs require <=2.6 (deprecated from 2.8).
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "torch==2.6.0",
+    "torchaudio==2.6.0",
+    "torchvision==0.21.0",
+    "pytorch-lightning>=2.4,<3",
+    "sentencepiece>=0.2.0",
+    "mediapipe>=0.10.14,<0.11",
+    "opencv-python>=4.9",
+    "scikit-image>=0.22",
+    "av>=12",
+    "numpy",
+]
+
+[tool.uv]
+# Dependency manifest only -- nothing to build/install as a package.
+package = false

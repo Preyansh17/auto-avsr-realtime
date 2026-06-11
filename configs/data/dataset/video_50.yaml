@@ -1,9 +1,0 @@
-defaults:
-  - _self_
-root_dir: /scratch/th3482/LipVideoData/video_50_25p_crops
-label_dir: "labels"
-train_file: "train.csv"
-val_file: "val.csv"
-test_file: "test.csv"
-
-
