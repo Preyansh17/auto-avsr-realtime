@@ -7,7 +7,14 @@ from pytorch_lightning import LightningModule
 from torchaudio.models import RNNTBeamSearch
 
 from . import EXPECTED_SPM_VOCAB_SIZE
-from .models import audio_resnet, emformer_rnnt, fusion_module, video_resnet
+from .models import (
+    audio_resnet,
+    emformer_rnnt,
+    emformer_rnnt_device,
+    fusion_module,
+    video_linear,
+    video_resnet,
+)
 from .schedulers import WarmupCosineScheduler
 from .text import post_process_hypotheses
 
@@ -27,15 +34,32 @@ class OnlineAVSRModule(LightningModule):
                 f"Expected SentencePiece vocab size {EXPECTED_SPM_VOCAB_SIZE}, got {vocab_size}"
             )
         self.blank_idx = vocab_size
-        self.segment_length = int(getattr(args, "segment_length", 64) or 64)
-        self.right_context_length = int(getattr(args, "right_context_length", 0) or 0)
-        self.audio_frontend = audio_resnet()
-        self.video_frontend = video_resnet()
-        self.fusion = fusion_module()
-        self.model = emformer_rnnt(
-            segment_length=self.segment_length,
-            right_context_length=self.right_context_length,
-        )
+        # "recipe": examples/avsr config (Conv3dResNet video frontend, 20-layer
+        # Emformer, segment 64/rc 0, trained on 88x88 mouth ROIs).
+        # "device": the published device_avsr small model (Linear video
+        # frontend on 44x44 face crops, 12-layer Emformer, segment 32/rc 4).
+        self.architecture = getattr(args, "architecture", "recipe") or "recipe"
+        if self.architecture == "device":
+            self.segment_length = int(getattr(args, "segment_length", 32) or 32)
+            rc = getattr(args, "right_context_length", None)
+            self.right_context_length = 4 if rc is None else int(rc)
+            self.audio_frontend = audio_resnet()
+            self.video_frontend = video_linear()
+            self.fusion = fusion_module(hidden_dim=1024)
+            self.model = emformer_rnnt_device(
+                segment_length=self.segment_length,
+                right_context_length=self.right_context_length,
+            )
+        else:
+            self.segment_length = int(getattr(args, "segment_length", 64) or 64)
+            self.right_context_length = int(getattr(args, "right_context_length", 0) or 0)
+            self.audio_frontend = audio_resnet()
+            self.video_frontend = video_resnet()
+            self.fusion = fusion_module()
+            self.model = emformer_rnnt(
+                segment_length=self.segment_length,
+                right_context_length=self.right_context_length,
+            )
         self.loss = torchaudio.transforms.RNNTLoss(reduction="sum")
         self._decoder = None
 

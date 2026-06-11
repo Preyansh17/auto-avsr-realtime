@@ -183,9 +183,26 @@ class Conv1dResNet(nn.Module):
         return xs_pad.transpose(1, 2)
 
 
+class LinearVideoFrontend(nn.Module):
+    """Video frontend of the published device_avsr model: a single linear
+    projection of flattened 44x44 grayscale pixels per frame."""
+
+    def __init__(self, frame_size: int = 44, output_dim: int = 512):
+        super().__init__()
+        self.linear = nn.Linear(frame_size * frame_size, output_dim)
+
+    def forward(self, x):
+        batch_size, time, _, height, width = x.size()
+        return self.linear(x.view(batch_size, time, height * width))
+
+
 def video_resnet():
     return Conv3dResNet()
 
 
 def audio_resnet():
     return Conv1dResNet()
+
+
+def video_linear():
+    return LinearVideoFrontend()

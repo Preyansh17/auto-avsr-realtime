@@ -70,6 +70,24 @@ def iter_av_windows(
         yield start, end, v, a
 
 
+def _raw_resize_transform(size: int):
+    """No-detection pipeline: /255, resize to size x size, grayscale, normalize."""
+    import torch.nn as nn
+
+    class _Resize(nn.Module):
+        def forward(self, x):
+            if x.shape[-2:] != (size, size):
+                x = torch.nn.functional.interpolate(x, size=(size, size), mode="bilinear", align_corners=False)
+            return x
+
+    return torch.nn.Sequential(
+        torchvision.transforms.Normalize(0.0, 255.0),
+        _Resize(),
+        torchvision.transforms.Grayscale(),
+        torchvision.transforms.Normalize(0.421, 0.165),
+    )
+
+
 class FacePreprocessor:
     """Tutorial preprocessing: mediapipe face detection -> alignment -> face
     crop -> resize. resize_to=44 matches the published device_avsr JIT model;
@@ -82,7 +100,7 @@ class FacePreprocessor:
         self.landmarks_detector = LandmarksDetector()
         self.video_process = VideoProcess()
         self.resize_to = resize_to
-        self._fallback = VideoTransform("roi")
+        self._fallback = _raw_resize_transform(resize_to)
         self.pipeline = torch.nn.Sequential(
             torchvision.transforms.Normalize(0.0, 255.0),
             torchvision.transforms.Grayscale(),
@@ -144,10 +162,11 @@ class MouthCropPreprocessor:
 
 class RoiPreprocessor:
     """For inputs that are already mouth-ROI crops (patient mp4s) or for raw
-    smoke tests: no detection, resize to 88, grayscale, normalize."""
+    smoke tests: no detection, resize to the model's frame size, grayscale,
+    normalize. size: 88 for recipe models, 44 for the device model."""
 
-    def __init__(self):
-        self.transform = VideoTransform("roi")
+    def __init__(self, size: int = 88):
+        self.transform = _raw_resize_transform(size)
 
     def __call__(self, video_thwc: np.ndarray) -> torch.Tensor:
         video = torch.from_numpy(np.ascontiguousarray(video_thwc)).permute(0, 3, 1, 2).float()
@@ -160,7 +179,8 @@ def make_preprocessor(mode: str, detector: str = "mediapipe", face_resize: int =
     if mode == "mouth":
         return MouthCropPreprocessor(detector=detector, device=device)
     if mode in ("roi", "none"):
-        return RoiPreprocessor()
+        # face_resize doubles as the model frame size for detection-free modes
+        return RoiPreprocessor(size=face_resize)
     raise ValueError(f"Unknown preprocess mode: {mode}")
 
 
@@ -277,18 +297,19 @@ def load_eager_pipeline(
     checkpoint_path: str,
     sp_model_path: str,
     device: str = "cpu",
-    preprocess: str = "roi",
+    preprocess: Optional[str] = None,
     detector: str = "mediapipe",
     beam_width: int = 10,
     carry_state: bool = True,
     segment_length: Optional[int] = None,
     right_context_length: Optional[int] = None,
-    face_resize: int = 88,
+    architecture: Optional[str] = None,
+    face_resize: Optional[int] = None,
 ):
     """Build a streaming pipeline from an OnlineAVSRModule checkpoint.
 
-    Segment/right-context lengths come from the checkpoint hparams when
-    present; CLI overrides win.
+    Architecture and segment/right-context lengths come from the checkpoint
+    hparams when present; CLI overrides win.
     """
     from types import SimpleNamespace
 
@@ -299,23 +320,39 @@ def load_eager_pipeline(
     sp_model = load_sentencepiece_model(sp_model_path)
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     hparams = ckpt.get("hyper_parameters", {}).get("args") if isinstance(ckpt, dict) else None
-    seg = segment_length or getattr(hparams, "segment_length", None) or 64
+    arch = architecture or getattr(hparams, "architecture", None)
+    if arch is None:
+        # device-variant checkpoints are recognizable by the linear video frontend
+        sd_probe, _ = extract_state_dict(ckpt)
+        arch = "device" if any(k.startswith("video_frontend.linear.") for k in sd_probe) else "recipe"
+    default_seg, default_rc = (32, 4) if arch == "device" else (64, 0)
+    seg = segment_length or getattr(hparams, "segment_length", None) or default_seg
     rc = right_context_length
     if rc is None:
-        rc = getattr(hparams, "right_context_length", None) or 0
+        rc = getattr(hparams, "right_context_length", None)
+    if rc is None:
+        rc = default_rc
     module = OnlineAVSRModule(
-        args=SimpleNamespace(segment_length=seg, right_context_length=rc), sp_model=sp_model
+        args=SimpleNamespace(architecture=arch, segment_length=seg, right_context_length=rc),
+        sp_model=sp_model,
     )
     state_dict, _ = extract_state_dict(ckpt)
     state_dict = {k: v for k, v in state_dict.items() if not k.startswith("loss.")}
     validate_online_state_dict(state_dict)
     module.load_state_dict(state_dict, strict=False)
     module.to(device).eval()
+    if preprocess is None:
+        # device model was trained on face crops; recipe models on mouth ROIs
+        preprocess = "face" if arch == "device" else "roi"
+    if face_resize is None:
+        face_resize = 44 if arch == "device" else 88
     preprocessor = make_preprocessor(preprocess, detector=detector, face_resize=face_resize, device=device)
-    return StreamingInferencePipeline(
+    pipeline = StreamingInferencePipeline(
         EagerBackend(module), preprocessor, sp_model, beam_width=beam_width,
         carry_state=carry_state, device=device,
     )
+    pipeline.preprocess_mode = preprocess
+    return pipeline
 
 
 def load_jit_pipeline(

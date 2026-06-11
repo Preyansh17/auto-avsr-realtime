@@ -10,7 +10,9 @@ dependencies = [
     "torchvision==0.21.0",
     "pytorch-lightning>=2.4,<3",
     "sentencepiece>=0.2.0",
-    "mediapipe>=0.10.14,<0.11",
+    # 0.10.21 is the last line with the legacy mp.solutions API the vendored
+    # face/landmark detectors use; newer 0.10.x wheels removed it.
+    "mediapipe>=0.10.14,<=0.10.21",
     "opencv-python>=4.9",
     "scikit-image>=0.22",
     "av>=12",
