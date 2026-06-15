@@ -4,8 +4,8 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8GB
 #SBATCH --time=1:00:00
-#SBATCH --output=%x_%j.out
-#SBATCH --error=%x_%j.err
+#SBATCH --output=/scratch/pa2753/auto-avsr/output/%x_%j.out
+#SBATCH --error=/scratch/pa2753/auto-avsr/output/%x_%j.err
 #SBATCH --mail-user=pa2753@nyu.edu
 #SBATCH --mail-type=END,FAIL
 

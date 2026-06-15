@@ -5,8 +5,8 @@
 #SBATCH --mem=16GB
 #SBATCH --time=2:00:00
 #SBATCH --gres=gpu:1
-#SBATCH --output=/scratch/pa2753/auto-avsr/output/%x_%j/%x_%j.out
-#SBATCH --error=/scratch/pa2753/auto-avsr/output/%x_%j/%x_%j.err
+#SBATCH --output=/scratch/pa2753/auto-avsr/output/%x_%j.out
+#SBATCH --error=/scratch/pa2753/auto-avsr/output/%x_%j.err
 #SBATCH --mail-user=pa2753@nyu.edu
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --account=torch_pr_39_tandon_advanced
