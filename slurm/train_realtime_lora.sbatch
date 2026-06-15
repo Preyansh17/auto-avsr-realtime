@@ -52,7 +52,7 @@ export ACCUMULATE_GRAD_BATCHES="${ACCUMULATE_GRAD_BATCHES:-4}"
 export PRECISION="${PRECISION:-bf16-mixed}"
 export LEARNING_RATE="${LEARNING_RATE:-0.0005}"
 export NUM_WORKERS="${NUM_WORKERS:-4}"
-export OVERLAY_EXT3="${OVERLAY_EXT3:-/scratch/th3482/avsr/overlay-15GB-500K.ext3}"
+export OVERLAY_EXT3="${OVERLAY_EXT3:-/scratch/pa2753/avsr/avsr.ext3}"
 export SIF_IMAGE="${SIF_IMAGE:-/share/apps/images/cuda12.3.2-cudnn9.0.0-ubuntu-22.04.4.sif}"
 
 [[ -s "${PRETRAINED_MODEL_PATH}" ]] || { echo "[FATAL] missing ${PRETRAINED_MODEL_PATH}; run scripts/download_assets.py then scripts/bootstrap_from_jit.py" >&2; exit 4; }

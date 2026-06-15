@@ -31,7 +31,7 @@ export PREPROCESS="${PREPROCESS:-roi}"
 export TEST_FILE="${TEST_FILE:-${VAL_FILE}}"
 export RAW_TEST_FILE="${RAW_TEST_FILE:-${RAW_VAL_FILE}}"
 export OUTPUT_DIR="${OUTPUT_DIR:-/scratch/pa2753/experiments/avsr_realtime/eval}"
-export OVERLAY_EXT3="${OVERLAY_EXT3:-/scratch/th3482/avsr/overlay-15GB-500K.ext3}"
+export OVERLAY_EXT3="${OVERLAY_EXT3:-/scratch/pa2753/avsr/avsr.ext3}"
 export SIF_IMAGE="${SIF_IMAGE:-/share/apps/images/cuda12.3.2-cudnn9.0.0-ubuntu-22.04.4.sif}"
 
 [[ -s "${CHECKPOINT}" ]] || { echo "[FATAL] missing checkpoint ${CHECKPOINT}" >&2; exit 4; }

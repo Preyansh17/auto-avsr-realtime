@@ -17,7 +17,8 @@ set -euo pipefail
 export PROJECT_ROOT="${PROJECT_ROOT:-/home/${USER}/auto-avsr-realtime}"
 export SCRATCH_ROOT="${SCRATCH_ROOT:-/scratch/${USER}}"
 export OLD_CSVS="${OLD_CSVS:-${SCRATCH_ROOT}/LipVideoData/patient_25p_crops_unseen/labels/patient_retinaface_train_transcript_lengths_seg24s.csv}"
-export OVERLAY_EXT3="${OVERLAY_EXT3:-${SCRATCH_ROOT}/avsr/overlay-15GB-500K.ext3}"
+export OVERLAY_EXT3="${OVERLAY_EXT3:-/scratch/pa2753/avsr/avsr.ext3}"
+export CONDA_ENV="${CONDA_ENV:-avsr_realtime}"
 export SIF_IMAGE="${SIF_IMAGE:-/share/apps/images/cuda12.3.2-cudnn9.0.0-ubuntu-22.04.4.sif}"
 
 singularity exec \
@@ -27,7 +28,7 @@ singularity exec \
   /bin/bash -lc '
 set -euo pipefail
 source /ext3/env.sh
-conda activate avsr_realtime
+conda activate '"${CONDA_ENV}"'
 cd "${PROJECT_ROOT}"
 
 # shellcheck disable=SC2086
