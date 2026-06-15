@@ -99,6 +99,7 @@ def build_trainer(args, run_dir):
         num_nodes=args.num_nodes,
         default_root_dir=run_dir,
         max_epochs=args.epochs,
+        max_steps=args.max_steps if args.max_steps > 0 else -1,
         precision=args.precision,
         accumulate_grad_batches=args.accumulate_grad_batches,
         gradient_clip_val=10.0,
@@ -130,6 +131,8 @@ def parse_args():
     parser.add_argument("--sp-model-path", default=os.path.join(PROJECT_ROOT, "spm", "spm_unigram_1023.model"))
     parser.add_argument("--generate-sp-model", action="store_true")
     parser.add_argument("--epochs", type=int, default=int(os.environ.get("EPOCHS", "55")))
+    parser.add_argument("--max-steps", type=int, default=int(os.environ.get("MAX_STEPS", "0")),
+                        help="Stop after this many optimizer steps (mirrors the offline runs' max_steps; 0 = use epochs)")
     parser.add_argument("--warmup-epochs", type=int, default=10)
     parser.add_argument("--num-nodes", type=int, default=int(os.environ.get("NUM_NODES", "1")))
     parser.add_argument("--gpus", type=int, default=int(os.environ.get("GPUS", "1")))
@@ -202,6 +205,7 @@ def main():
         "sp_model_sha256": sha256_file(sp_model_path),
         "pretrained_model_path": args.pretrained_model_path,
         "epochs": args.epochs,
+        "max_steps": args.max_steps,
         "batch_size": args.batch_size,
         "accumulate_grad_batches": args.accumulate_grad_batches,
         "precision": args.precision,

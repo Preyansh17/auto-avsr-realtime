@@ -119,16 +119,46 @@ Notes:
 
 ## Cluster environment (NYU HPC)
 
-The sbatch templates expect a conda env `avsr_realtime` inside the singularity overlay:
+The sbatch templates expect a conda env `avsr_realtime` inside the singularity overlay.
+Create it once with the overlay mounted **read-write** (the run templates mount it `:ro`):
 
 ```bash
-conda create -y -n avsr_realtime python=3.12
-conda activate avsr_realtime
+singularity exec --overlay /scratch/$USER/avsr/overlay-15GB-500K.ext3:rw \
+  /share/apps/images/cuda12.3.2-cudnn9.0.0-ubuntu-22.04.4.sif /bin/bash
+# inside:
+source /ext3/env.sh
+conda create -y -n avsr_realtime python=3.12 && conda activate avsr_realtime
 pip install torch==2.6.0 torchaudio==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
 pip install "pytorch-lightning>=2.4,<3" sentencepiece "mediapipe<=0.10.21" opencv-python scikit-image av soundfile
 ```
 
-All templates take `PROJECT_ROOT`, `SCRATCH_ROOT`, `ROOT_DIR`, etc. as env-var overrides.
+### Patient data layout (matches the offline runs)
+
+The training/eval templates resolve patient data exactly like the offline
+`train_patient_av_lora_legal298_*` scripts, via `slurm/_patient_data.sh`:
+
+- `RUN_DATA_MODE=legal_only` (default) → `patient_legal298_crops_unseen`
+- `RUN_DATA_MODE=legacy_only` → `patient_25p_crops_unseen`
+- `RUN_DATA_MODE=merged` (or `MERGE_WITH_PATIENT_UNSEEN=1`) → builds the legal298+unseen
+  merge (per-source `dataset_name` rewrite + symlinks), same as the offline merge.
+
+It reads the same `patient_retinaface_{train,val}_transcript_lengths_seg24s.csv` files and,
+before training, re-tokenizes them to the 1023-piece vocab (`*_spm1023.csv`).
+
+All templates take `PROJECT_ROOT`, `ROOT_DIR`, `RUN_DATA_MODE`, `LORA_*`, `MAX_STEPS`,
+`MAX_EPOCHS`, etc. as env-var overrides, e.g. `MERGE_WITH_PATIENT_UNSEEN=1 sbatch slurm/train_realtime_lora.sbatch`.
+
+### What carries over from the offline LoRA runs, and what doesn't
+
+| Offline arg | Streaming equivalent |
+| --- | --- |
+| `lora.r=8 alpha=16 dropout=0.05` | identical (`--lora-r/--lora-alpha/--lora-dropout`) |
+| `lora.scopes=[encoder,aux_encoder,decoder]` ("all") | `--lora-scopes all` (encoder/predictor/joiner/fusion/video_frontend) |
+| `max_steps=2850`, `max_epochs=10000` | identical (`--max-steps`, `--epochs`) |
+| `pretrained_model_path=…Conformer.pth` | `cpts/online_avsr_bootstrap.ckpt` (device_avsr) |
+| `vocab_file=…sentences.txt` (closed-vocab decode) | **none** — RNN-T decodes open-vocabulary |
+| `ctc_weight=0.1`, `beam_size=40`, `pre_beam_ratio` | **none in training** — RNN-T has no CTC; beam is decode-only (`eval.py --beam-width`) |
+| `data.modality=audiovisual` | AV only (the streaming model is audio-visual) |
 
 ## How streaming works
 
