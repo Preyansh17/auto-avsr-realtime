@@ -2,10 +2,12 @@
 """Re-tokenize auto-avsr patient label CSVs for the streaming recipe.
 
 The original CSVs ("dataset_name,rel_path,input_length,token ids") carry
-token ids from the offline unigram5000 SentencePiece model. The streaming
-Emformer RNN-T uses the 1023-piece model, so each row is decoded with the
-old model and re-encoded with the new one. Output keeps the same 4-field
-format with a _spm1023 filename suffix.
+token ids produced by the offline TextTransform: SentencePiece pieces
+mapped to indices in spm/unigram/unigram5000_units.txt (ids 1..5047,
+0 reserved for the CTC blank) -- NOT SentencePiece's own ids. So each row
+is decoded back to text via that units map and re-encoded with the
+streaming model's 1023-piece SentencePiece model. Output keeps the same
+4-field format with a _spm1023 filename suffix.
 
 Usage:
   python scripts/regenerate_patient_labels.py --old-csv labels/train.csv --preview 5
@@ -21,12 +23,39 @@ if PROJECT_ROOT not in sys.path:
 
 from online_avsr.text import extract_reference_from_filename  # noqa: E402
 
+DEFAULT_OLD_UNITS = os.path.join(PROJECT_ROOT, "spm", "unigram", "unigram5000_units.txt")
+DEFAULT_NEW_SPM = os.path.join(PROJECT_ROOT, "spm", "spm_unigram_1023.model")
+
+
+def load_units_decoder(units_path):
+    """Inverse of TextTransform.tokenize: units-file id -> piece -> text.
+
+    units line format: "<piece> <id>". Returns a function decode(ids)->str
+    that joins pieces and turns the SentencePiece word-boundary marker
+    (▁) into spaces, matching TextTransform.post_process.
+    """
+    id_to_piece = {}
+    with open(units_path, encoding="utf-8") as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            id_to_piece[int(parts[-1])] = parts[0]
+    if not id_to_piece:
+        raise SystemExit(f"No units parsed from {units_path}")
+
+    def decode(ids):
+        pieces = [id_to_piece.get(i, "<unk>") for i in ids]
+        return "".join(pieces).replace("▁", " ").strip()
+
+    return decode
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--old-csv", required=True, nargs="+", help="Old label CSV(s) with unigram5000 token ids")
-    parser.add_argument("--old-spm", default=os.path.join(PROJECT_ROOT, "spm", "unigram", "unigram5000.model"))
-    parser.add_argument("--new-spm", default=os.path.join(PROJECT_ROOT, "spm", "spm_unigram_1023.model"))
+    parser.add_argument("--old-csv", required=True, nargs="+", help="Old label CSV(s) with units-file token ids")
+    parser.add_argument("--old-units", default=DEFAULT_OLD_UNITS, help="unigram5000_units.txt used to generate the old ids")
+    parser.add_argument("--new-spm", default=DEFAULT_NEW_SPM)
     parser.add_argument("--out", default=None, help="Output path (single input only; default: <input>_spm1023.csv)")
     parser.add_argument("--text-from", choices=["tokens", "filename"], default="tokens",
                         help="Recover text from old token ids (default) or from the filename")
@@ -34,7 +63,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def convert(old_csv, old_sp, new_sp, args):
+def convert(old_csv, decode_old, new_sp, args):
     out_path = args.out or (os.path.splitext(old_csv)[0] + "_spm1023.csv")
     rows_out, skipped = [], 0
     previewed = 0
@@ -51,7 +80,7 @@ def convert(old_csv, old_sp, new_sp, args):
                 text = extract_reference_from_filename(rel_path).lower()
             else:
                 old_ids = [int(t) for t in parts[3].split()]
-                text = old_sp.decode(old_ids).lower()
+                text = decode_old(old_ids).lower()
             new_ids = new_sp.encode(text)
             if not text or not new_ids:
                 skipped += 1
@@ -76,12 +105,12 @@ def main():
         raise SystemExit("--out is only valid with a single --old-csv")
     import sentencepiece as spm
 
-    old_sp = spm.SentencePieceProcessor(model_file=args.old_spm)
+    decode_old = load_units_decoder(args.old_units)
     new_sp = spm.SentencePieceProcessor(model_file=args.new_spm)
     if new_sp.get_piece_size() != 1023:
         raise SystemExit(f"--new-spm must be the 1023-piece model, got {new_sp.get_piece_size()}")
     for old_csv in args.old_csv:
-        convert(old_csv, old_sp, new_sp, args)
+        convert(old_csv, decode_old, new_sp, args)
 
 
 if __name__ == "__main__":
