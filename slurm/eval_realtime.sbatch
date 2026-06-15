@@ -49,7 +49,7 @@ conda activate '"${CONDA_ENV}"'
 export SSL_CERT_FILE='"${PROJECT_ROOT}"'/cacert.pem
 cd '"${PROJECT_ROOT}"'
 
-[[ -s "'"${TEST_FILE}"'" ]] || python scripts/regenerate_patient_labels.py --old-csv "'"${RAW_TEST_FILE}"'"
+[[ -s "'"${TEST_FILE}"'" ]] || python scripts/regenerate_patient_labels.py --old-csv "'"${RAW_TEST_FILE}"'" --out "'"${TEST_FILE}"'"
 
 python eval.py \
   --checkpoint "'"${CHECKPOINT}"'" \

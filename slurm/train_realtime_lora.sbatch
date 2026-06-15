@@ -72,8 +72,8 @@ export SSL_CERT_FILE='"${PROJECT_ROOT}"'/cacert.pem
 cd '"${PROJECT_ROOT}"'
 
 # Re-tokenize the resolved CSVs to the 1023-piece vocab (idempotent).
-[[ -s "'"${TRAIN_FILE}"'" ]] || python scripts/regenerate_patient_labels.py --old-csv "'"${RAW_TRAIN_FILE}"'"
-[[ -s "'"${VAL_FILE}"'"   ]] || python scripts/regenerate_patient_labels.py --old-csv "'"${RAW_VAL_FILE}"'"
+[[ -s "'"${TRAIN_FILE}"'" ]] || python scripts/regenerate_patient_labels.py --old-csv "'"${RAW_TRAIN_FILE}"'" --out "'"${TRAIN_FILE}"'"
+[[ -s "'"${VAL_FILE}"'"   ]] || python scripts/regenerate_patient_labels.py --old-csv "'"${RAW_VAL_FILE}"'" --out "'"${VAL_FILE}"'"
 
 python train.py \
   --model-source bootstrap \

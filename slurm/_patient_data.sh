@@ -97,15 +97,19 @@ for f in "${RAW_TRAIN_FILE}" "${RAW_VAL_FILE}"; do
   [[ -s "${f}" ]] || { echo "[FATAL] Missing label CSV: ${f}" >&2; exit 4; }
 done
 
-# Final CSV names the streaming trainer consumes (re-tokenized in-container).
-TRAIN_FILE="${RAW_TRAIN_FILE%.csv}_spm1023.csv"
-VAL_FILE="${RAW_VAL_FILE%.csv}_spm1023.csv"
+# Re-tokenized CSVs the streaming trainer consumes. Written to a user-owned
+# dir (not next to the source: the th3482 data roots are read-only for you).
+LABELS_OUT_DIR="${LABELS_OUT_DIR:-/scratch/${USER}/avsr_realtime/labels/${DATASET_TAG}}"
+mkdir -p "${LABELS_OUT_DIR}"
+TRAIN_FILE="${LABELS_OUT_DIR}/$(basename "${RAW_TRAIN_FILE%.csv}")_spm1023.csv"
+VAL_FILE="${LABELS_OUT_DIR}/$(basename "${RAW_VAL_FILE%.csv}")_spm1023.csv"
 
-export PROJECT_ROOT ROOT_DIR RAW_TRAIN_FILE RAW_VAL_FILE TRAIN_FILE VAL_FILE DATASET_TAG RUN_DATA_MODE
+export PROJECT_ROOT ROOT_DIR RAW_TRAIN_FILE RAW_VAL_FILE TRAIN_FILE VAL_FILE LABELS_OUT_DIR DATASET_TAG RUN_DATA_MODE
 
 echo "RUN_DATA_MODE=${RUN_DATA_MODE}"
 echo "ROOT_DIR=${ROOT_DIR}"
 echo "RAW_TRAIN_FILE=${RAW_TRAIN_FILE}"
 echo "RAW_VAL_FILE=${RAW_VAL_FILE}"
+echo "LABELS_OUT_DIR=${LABELS_OUT_DIR}"
 echo "TRAIN_FILE(spm1023)=${TRAIN_FILE}"
 echo "VAL_FILE(spm1023)=${VAL_FILE}"
