@@ -19,6 +19,7 @@
 set -euo pipefail
 
 export PROJECT_ROOT="${PROJECT_ROOT:-/home/pa2753/auto-avsr-realtime}"
+export CONDA_ENV="${CONDA_ENV:-avsr_realtime}"
 mkdir -p "/scratch/${USER}/auto-avsr/output"
 
 source "${PROJECT_ROOT}/slurm/_patient_data.sh"
@@ -44,7 +45,7 @@ singularity exec --nv \
   /bin/bash -lc '
 set -euo pipefail
 source /ext3/env.sh
-conda activate avsr_realtime
+conda activate '"${CONDA_ENV}"'
 export SSL_CERT_FILE='"${PROJECT_ROOT}"'/cacert.pem
 cd '"${PROJECT_ROOT}"'
 
