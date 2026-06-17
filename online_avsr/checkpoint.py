@@ -94,7 +94,7 @@ def load_validated_state_dict(path: str, map_location="cpu") -> dict:
 
     if not path or not os.path.isfile(path):
         raise FileNotFoundError(f"Checkpoint not found: {path}")
-    checkpoint = torch.load(path, map_location=map_location)
+    checkpoint = torch.load(path, map_location=map_location, weights_only=False)
     state_dict, _ = extract_state_dict(checkpoint)
     validate_online_state_dict(state_dict)
     return state_dict

@@ -12,7 +12,7 @@ def average_checkpoints(paths: List[str]) -> dict:
     """
     avg = None
     for path in paths:
-        states = torch.load(path, map_location="cpu")["state_dict"]
+        states = torch.load(path, map_location="cpu", weights_only=False)["state_dict"]
         if avg is None:
             avg = {k: v.clone() for k, v in states.items()}
         else:
