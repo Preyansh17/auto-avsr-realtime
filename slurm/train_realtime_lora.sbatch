@@ -45,7 +45,8 @@ export LORA_R="${LORA_R:-8}"
 export LORA_ALPHA="${LORA_ALPHA:-16}"
 export LORA_DROPOUT="${LORA_DROPOUT:-0.05}"
 export LORA_SCOPES="${LORA_SCOPES:-all}"          # offline exp1 "all" == every trainable block
-export MAX_STEPS="${MAX_STEPS:-2850}"             # same step budget as the offline exp1
+export MAX_STEPS="${MAX_STEPS:-5700}"
+export RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
 export MAX_EPOCHS="${MAX_EPOCHS:-10000}"
 export BATCH_SIZE="${BATCH_SIZE:-2}"
 export ACCUMULATE_GRAD_BATCHES="${ACCUMULATE_GRAD_BATCHES:-4}"
@@ -69,6 +70,7 @@ set -euo pipefail
 source /ext3/env.sh
 conda activate '"${CONDA_ENV}"'
 export SSL_CERT_FILE='"${PROJECT_ROOT}"'/cacert.pem
+export RESUME_FROM_CHECKPOINT='"${RESUME_FROM_CHECKPOINT}"'
 cd '"${PROJECT_ROOT}"'
 
 # Re-tokenize the resolved CSVs to the 1023-piece vocab (idempotent).

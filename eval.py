@@ -17,6 +17,7 @@ import statistics
 import sys
 import time
 
+import numpy as np
 import torch
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +31,7 @@ from online_avsr.patient_dataset import (  # noqa: E402
     discover_patient_records,
 )
 from online_avsr.streaming import (  # noqa: E402
+    RATE_RATIO,
     iter_av_windows,
     load_eager_pipeline,
     load_jit_pipeline,
@@ -54,6 +56,8 @@ def parse_args():
     parser.add_argument("--context-frames", type=int, default=4)
     parser.add_argument("--beam-width", type=int, default=10)
     parser.add_argument("--max-frames", type=int, default=None, help="Skip clips longer than this")
+    parser.add_argument("--leading-silence-frames", type=int, default=0,
+                        help="Prepend N silent frames to each clip before streaming to warm up the Emformer")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--output-dir", default=os.path.join(PROJECT_ROOT, "outputs", "eval"))
     parser.add_argument("--cpu", action="store_true")
@@ -83,6 +87,10 @@ def eval_streaming(args, pipeline, records, step, lookback, lookahead, trim, jso
         for record in records:
             try:
                 video, audio, fps = load_media_file(record.path)
+                if args.leading_silence_frames > 0:
+                    n = args.leading_silence_frames
+                    video = np.concatenate([np.zeros((n, *video.shape[1:]), dtype=video.dtype), video])
+                    audio = torch.cat([torch.zeros(n * RATE_RATIO, audio.size(1), dtype=audio.dtype), audio])
                 pipeline.reset()
                 walls = []
                 for start, end, v_win, a_win in iter_av_windows(

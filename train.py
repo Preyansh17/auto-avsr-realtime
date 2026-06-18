@@ -20,6 +20,9 @@ from typing import Dict, Optional
 
 import torch
 
+# argparse.Namespace is stored in Lightning checkpoints; allow it under PyTorch 2.6+
+torch.serialization.add_safe_globals([argparse.Namespace])
+
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)

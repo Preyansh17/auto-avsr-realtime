@@ -9,7 +9,7 @@
 #SBATCH --error=/scratch/pa2753/auto-avsr/output/%x_%j.err
 #SBATCH --mail-user=pa2753@nyu.edu
 #SBATCH --mail-type=END,FAIL
-#SBATCH --account=torch_pr_39_tandon_advanced
+#SBATCH --account=torch_pr_39_general
 
 # Streaming evaluation (WER + RTF) on the same patient data / roots / modes as
 # training. Defaults to the resolved val split as the test set (matching the
@@ -22,15 +22,19 @@ export PROJECT_ROOT="${PROJECT_ROOT:-/home/pa2753/auto-avsr-realtime}"
 export CONDA_ENV="${CONDA_ENV:-avsr_realtime}"
 mkdir -p "/scratch/${USER}/auto-avsr/output"
 
-source "${PROJECT_ROOT}/slurm/_patient_data.sh"
+# EVAL_MODE selects the eval set independently of the training corpus.
+# legal_only (default) | legacy_only | merged
+export EVAL_MODE="${EVAL_MODE:-legal_only}"
+RUN_DATA_MODE="${EVAL_MODE}" source "${PROJECT_ROOT}/slurm/_patient_data.sh"
 
 export CHECKPOINT="${CHECKPOINT:-${PROJECT_ROOT}/cpts/online_avsr_bootstrap.ckpt}"
+export LEADING_SILENCE_FRAMES="${LEADING_SILENCE_FRAMES:-16}"
 export SP_MODEL="${SP_MODEL:-${PROJECT_ROOT}/spm/spm_unigram_1023.model}"
 export MODE="${MODE:-streaming}"
 export PREPROCESS="${PREPROCESS:-roi}"
 export TEST_FILE="${TEST_FILE:-${VAL_FILE}}"
 export RAW_TEST_FILE="${RAW_TEST_FILE:-${RAW_VAL_FILE}}"
-export OUTPUT_DIR="${OUTPUT_DIR:-/scratch/pa2753/experiments/avsr_realtime/eval}"
+export OUTPUT_DIR="${OUTPUT_DIR:-/scratch/pa2753/experiments/avsr_realtime/eval/${EVAL_MODE}}"
 export OVERLAY_EXT3="${OVERLAY_EXT3:-/scratch/pa2753/avsr/avsr.ext3}"
 export SIF_IMAGE="${SIF_IMAGE:-/share/apps/images/cuda12.3.2-cudnn9.0.0-ubuntu-22.04.4.sif}"
 
@@ -58,6 +62,7 @@ python eval.py \
   --test-file "'"${TEST_FILE}"'" \
   --sp-model-path "'"${SP_MODEL}"'" \
   --preprocess "'"${PREPROCESS}"'" \
+  --leading-silence-frames "'"${LEADING_SILENCE_FRAMES}"'" \
   --output-dir "'"${OUTPUT_DIR}"'"
 '
 echo "Finished at $(date)"
