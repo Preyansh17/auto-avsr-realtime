@@ -368,9 +368,20 @@ def load_eager_pipeline(
     hparams = ckpt.get("hyper_parameters", {}).get("args") if isinstance(ckpt, dict) else None
     arch = architecture or getattr(hparams, "architecture", None)
     if arch is None:
-        # device-variant checkpoints are recognizable by the linear video frontend
+        # Distinguish device (256-dim Emformer) from recipe (128-dim) by the
+        # transcriber layer dim itself — modality-independent, unlike the old
+        # video_frontend.linear. probe which is absent in audio-only checkpoints.
         sd_probe, _ = extract_state_dict(ckpt)
-        arch = "device" if any(k.startswith("video_frontend.linear.") for k in sd_probe) else "recipe"
+        emformer_dim = next(
+            (v.shape[0] for k, v in sd_probe.items()
+             if k.endswith("attention.out_proj.weight") and "emformer_layers" in k),
+            None,
+        )
+        if emformer_dim is not None:
+            arch = "device" if emformer_dim >= 256 else "recipe"
+        else:
+            # Fall back to the frontend probe for non-standard checkpoints
+            arch = "device" if any(k.startswith("video_frontend.linear.") for k in sd_probe) else "recipe"
     default_seg, default_rc = (32, 4) if arch == "device" else (64, 0)
     seg = segment_length or getattr(hparams, "segment_length", None) or default_seg
     rc = right_context_length

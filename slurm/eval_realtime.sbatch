@@ -28,7 +28,6 @@ export EVAL_MODE="${EVAL_MODE:-legal_only}"
 RUN_DATA_MODE="${EVAL_MODE}" source "${PROJECT_ROOT}/slurm/_patient_data.sh"
 
 export CHECKPOINT="${CHECKPOINT:-${PROJECT_ROOT}/cpts/online_avsr_bootstrap.ckpt}"
-export LEADING_SILENCE_FRAMES="${LEADING_SILENCE_FRAMES:-16}"
 export SP_MODEL="${SP_MODEL:-${PROJECT_ROOT}/spm/spm_unigram_1023.model}"
 export MODE="${MODE:-streaming}"
 export PREPROCESS="${PREPROCESS:-roi}"
@@ -62,7 +61,6 @@ python eval.py \
   --test-file "'"${TEST_FILE}"'" \
   --sp-model-path "'"${SP_MODEL}"'" \
   --preprocess "'"${PREPROCESS}"'" \
-  --leading-silence-frames "'"${LEADING_SILENCE_FRAMES}"'" \
   --output-dir "'"${OUTPUT_DIR}"'"
 '
 echo "Finished at $(date)"

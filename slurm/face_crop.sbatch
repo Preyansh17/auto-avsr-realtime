@@ -8,6 +8,7 @@
 #SBATCH --error=/scratch/pa2753/auto-avsr/output/%x_%j.err
 #SBATCH --mail-user=pa2753@nyu.edu
 #SBATCH --mail-type=END,FAIL
+#SBATCH --account=torch_pr_39_general
 
 # Pre-bake face crops from the ORIGINAL patient videos, matching the label
 # split, so the pretrained device frontend sees what it expects. CPU only
