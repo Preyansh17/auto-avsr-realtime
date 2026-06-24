@@ -378,8 +378,14 @@ def load_eager_pipeline(
         rc = getattr(hparams, "right_context_length", None)
     if rc is None:
         rc = default_rc
+    modality = getattr(hparams, "modality", None)
+    if modality is None:
+        sd_probe, _ = extract_state_dict(ckpt)
+        has_a = any(k.startswith("audio_frontend.") for k in sd_probe)
+        has_v = any(k.startswith("video_frontend.") for k in sd_probe)
+        modality = "audiovisual" if (has_a and has_v) else ("audio" if has_a else "video")
     module = OnlineAVSRModule(
-        args=SimpleNamespace(architecture=arch, segment_length=seg, right_context_length=rc),
+        args=SimpleNamespace(architecture=arch, segment_length=seg, right_context_length=rc, modality=modality),
         sp_model=sp_model,
     )
     state_dict, _ = extract_state_dict(ckpt)

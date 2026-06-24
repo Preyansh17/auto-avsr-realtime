@@ -68,21 +68,17 @@ def _has_any_prefix(keys: Iterable[str], prefixes) -> bool:
 
 def validate_online_state_dict(state_dict: dict) -> None:
     keys = list(state_dict.keys())
-    required = {
-        "audio_frontend": ["audio_frontend."],
-        "video_frontend": ["video_frontend."],
-        "fusion": ["fusion."],
-        "rnnt_model": ["model."],
-    }
-    missing = [name for name, prefixes in required.items() if not _has_any_prefix(keys, prefixes)]
     rnnt_key = any(
         k.startswith("model.") and any(token in k for token in ("transcriber", "predictor", "joiner"))
         for k in keys
     )
-    if missing or not rnnt_key:
+    # At least one frontend must be present (audiovisual has both; audio-only
+    # or video-only checkpoints have just one and no fusion).
+    has_frontend = _has_any_prefix(keys, ["audio_frontend.", "video_frontend."])
+    if not rnnt_key or not has_frontend:
         raise ValueError(
             "Checkpoint does not look like an online AVSR RNN-T checkpoint; "
-            f"missing={missing}, rnnt_key_found={rnnt_key}"
+            f"rnnt_key_found={rnnt_key}, frontend_found={has_frontend}"
         )
     offline_markers = ("encoder.", "aux_encoder.", "decoder.", "ctc.")
     if any(k.startswith(offline_markers) for k in keys):

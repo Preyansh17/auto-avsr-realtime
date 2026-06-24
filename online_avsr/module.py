@@ -39,13 +39,19 @@ class OnlineAVSRModule(LightningModule):
         # "device": the published device_avsr small model (Linear video
         # frontend on 44x44 face crops, 12-layer Emformer, segment 32/rc 4).
         self.architecture = getattr(args, "architecture", "recipe") or "recipe"
+        # "audiovisual" (default) | "audio" | "video". Unimodal builds only the
+        # one frontend and feeds its 512-dim features straight to the Emformer
+        # (no fusion); reuses the pretrained frontend + RNN-T via strict=False.
+        self.modality = getattr(args, "modality", "audiovisual") or "audiovisual"
+        need_audio = self.modality in ("audio", "audiovisual")
+        need_video = self.modality in ("video", "audiovisual")
         if self.architecture == "device":
             self.segment_length = int(getattr(args, "segment_length", 32) or 32)
             rc = getattr(args, "right_context_length", None)
             self.right_context_length = 4 if rc is None else int(rc)
-            self.audio_frontend = audio_resnet()
-            self.video_frontend = video_linear()
-            self.fusion = fusion_module(hidden_dim=1024)
+            self.audio_frontend = audio_resnet() if need_audio else None
+            self.video_frontend = video_linear() if need_video else None
+            self.fusion = fusion_module(hidden_dim=1024) if self.modality == "audiovisual" else None
             self.model = emformer_rnnt_device(
                 segment_length=self.segment_length,
                 right_context_length=self.right_context_length,
@@ -53,9 +59,9 @@ class OnlineAVSRModule(LightningModule):
         else:
             self.segment_length = int(getattr(args, "segment_length", 64) or 64)
             self.right_context_length = int(getattr(args, "right_context_length", 0) or 0)
-            self.audio_frontend = audio_resnet()
-            self.video_frontend = video_resnet()
-            self.fusion = fusion_module()
+            self.audio_frontend = audio_resnet() if need_audio else None
+            self.video_frontend = video_resnet() if need_video else None
+            self.fusion = fusion_module() if self.modality == "audiovisual" else None
             self.model = emformer_rnnt(
                 segment_length=self.segment_length,
                 right_context_length=self.right_context_length,
@@ -65,14 +71,11 @@ class OnlineAVSRModule(LightningModule):
     def configure_optimizers(self):
         args = self.args
         lr = float(getattr(args, "learning_rate", 8e-4) or 8e-4)
+        mods = [m for m in (self.model, self.audio_frontend, self.video_frontend, self.fusion) if m is not None]
         trainable = [
             p
-            for p in itertools.chain(
-                self.model.parameters(),
-                self.video_frontend.parameters(),
-                self.audio_frontend.parameters(),
-                self.fusion.parameters(),
-            )
+            for m in mods
+            for p in m.parameters()
             if p.requires_grad  # LoRA fine-tunes freeze everything but the adapters
         ]
         optimizer = torch.optim.AdamW(
@@ -103,15 +106,25 @@ class OnlineAVSRModule(LightningModule):
         return decoder
 
     def encode_av(self, audios, videos):
-        video_features = self.video_frontend(videos)
-        audio_features = self.audio_frontend(audios)
-        length = min(video_features.size(1), audio_features.size(1))
-        if length <= 0:
-            raise ValueError("Audio/video frontends produced no frames")
-        video_features = video_features[:, :length]
-        audio_features = audio_features[:, :length]
-        fused = self.fusion(torch.cat([video_features, audio_features], dim=-1))
-        return fused
+        if self.modality == "audio":
+            feats = self.audio_frontend(audios)
+        elif self.modality == "video":
+            feats = self.video_frontend(videos)
+        else:
+            video_features = self.video_frontend(videos)
+            audio_features = self.audio_frontend(audios)
+            length = min(video_features.size(1), audio_features.size(1))
+            feats = self.fusion(torch.cat([video_features[:, :length], audio_features[:, :length]], dim=-1))
+        if feats.size(1) <= 0:
+            raise ValueError("Frontend produced no frames")
+        return feats
+
+    def _feature_lengths(self, batch):
+        if self.modality == "audio":
+            return batch.audio_lengths
+        if self.modality == "video":
+            return batch.video_lengths
+        return torch.minimum(batch.audio_lengths, batch.video_lengths)
 
     @torch.inference_mode()
     def encode_chunk(self, audio_chunk, video_chunk, context_frames: int = 0):
@@ -134,7 +147,7 @@ class OnlineAVSRModule(LightningModule):
         prepended_target_lengths = batch.target_lengths + 1
 
         fused = self.encode_av(batch.audios, batch.videos)
-        feature_lengths = torch.minimum(batch.audio_lengths, batch.video_lengths).to(device=self.device, dtype=torch.int32)
+        feature_lengths = self._feature_lengths(batch).to(device=self.device, dtype=torch.int32)
         output, src_lengths, _, _ = self.model(
             self._pad_right_context(fused),
             feature_lengths,
@@ -161,7 +174,7 @@ class OnlineAVSRModule(LightningModule):
 
     def forward(self, batch, beam_width=20):
         fused = self.encode_av(batch.audios.to(self.device), batch.videos.to(self.device))
-        lengths = torch.minimum(batch.audio_lengths, batch.video_lengths).to(self.device)
+        lengths = self._feature_lengths(batch).to(self.device)
         hypotheses = self.decoder(self._pad_right_context(fused), lengths, beam_width=beam_width)
         return post_process_hypotheses(hypotheses, self.sp_model)[0][0]
 

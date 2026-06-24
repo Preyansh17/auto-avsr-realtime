@@ -39,6 +39,7 @@ source "${PROJECT_ROOT}/slurm/_patient_data.sh"
 # --- streaming model + LoRA arguments --------------------------------------
 export PRETRAINED_MODEL_PATH="${PRETRAINED_MODEL_PATH:-${PROJECT_ROOT}/cpts/online_avsr_bootstrap.ckpt}"
 export SP_MODEL="${SP_MODEL:-${PROJECT_ROOT}/spm/spm_unigram_1023.model}"
+export MODALITY="${MODALITY:-audiovisual}"   # audiovisual | audio | video
 export EXP_DIR="${EXP_DIR:-/scratch/pa2753/experiments/avsr_realtime_lora}"
 export EXP_NAME="${EXP_NAME:-lora_all_${DATASET_TAG}_av_j${SLURM_JOB_ID:-noslurm}}"
 export LORA_R="${LORA_R:-8}"
@@ -78,6 +79,7 @@ cd '"${PROJECT_ROOT}"'
 [[ -s "'"${VAL_FILE}"'"   ]] || python scripts/regenerate_patient_labels.py --old-csv "'"${RAW_VAL_FILE}"'" --out "'"${VAL_FILE}"'"
 
 python train.py \
+  --modality "'"${MODALITY}"'" \
   --model-source bootstrap \
   --lora --lora-r "'"${LORA_R}"'" --lora-alpha "'"${LORA_ALPHA}"'" --lora-dropout "'"${LORA_DROPOUT}"'" \
   --lora-scopes '"${LORA_SCOPES}"' \

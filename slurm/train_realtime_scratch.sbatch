@@ -27,6 +27,7 @@ mkdir -p "/scratch/${USER}/auto-avsr/output"
 source "${PROJECT_ROOT}/slurm/_patient_data.sh"
 
 export SP_MODEL="${SP_MODEL:-${PROJECT_ROOT}/spm/spm_unigram_1023.model}"
+export MODALITY="${MODALITY:-audiovisual}"   # audiovisual | audio | video
 export ARCHITECTURE="${ARCHITECTURE:-recipe}"
 export SEGMENT_LENGTH="${SEGMENT_LENGTH:-32}"
 export RIGHT_CONTEXT_LENGTH="${RIGHT_CONTEXT_LENGTH:-4}"
@@ -66,6 +67,7 @@ else
 fi
 
 python train.py \
+  --modality "'"${MODALITY}"'" \
   --model-source scratch \
   --architecture "'"${ARCHITECTURE}"'" \
   --segment-length "'"${SEGMENT_LENGTH}"'" \

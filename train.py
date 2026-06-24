@@ -121,6 +121,8 @@ def parse_args():
     parser.add_argument("--model-source", choices=["bootstrap", "scratch"], default="bootstrap")
     parser.add_argument("--architecture", choices=["device", "recipe"], default=None,
                         help="Default: device for bootstrap, recipe for scratch")
+    parser.add_argument("--modality", choices=["audiovisual", "audio", "video"], default="audiovisual",
+                        help="audio/video-only drop the other frontend + fusion (reuse pretrained frontend + RNN-T)")
     parser.add_argument("--segment-length", type=int, default=None)
     parser.add_argument("--right-context-length", type=int, default=None)
     parser.add_argument("--frame-size", type=int, default=None,

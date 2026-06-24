@@ -27,6 +27,7 @@ source "${PROJECT_ROOT}/slurm/_patient_data.sh"
 
 export PRETRAINED_MODEL_PATH="${PRETRAINED_MODEL_PATH:-${PROJECT_ROOT}/cpts/online_avsr_bootstrap.ckpt}"
 export SP_MODEL="${SP_MODEL:-${PROJECT_ROOT}/spm/spm_unigram_1023.model}"
+export MODALITY="${MODALITY:-audiovisual}"   # audiovisual | audio | video
 export EXP_DIR="${EXP_DIR:-/scratch/pa2753/experiments/avsr_realtime_finetune}"
 export EXP_NAME="${EXP_NAME:-finetune_${DATASET_TAG}_av_j${SLURM_JOB_ID:-noslurm}}"
 export MAX_STEPS="${MAX_STEPS:-2850}"
@@ -59,6 +60,7 @@ cd '"${PROJECT_ROOT}"'
 [[ -s "'"${VAL_FILE}"'"   ]] || python scripts/regenerate_patient_labels.py --old-csv "'"${RAW_VAL_FILE}"'" --out "'"${VAL_FILE}"'"
 
 python train.py \
+  --modality "'"${MODALITY}"'" \
   --model-source bootstrap \
   --root-dir "'"${ROOT_DIR}"'" \
   --train-file "'"${TRAIN_FILE}"'" \
