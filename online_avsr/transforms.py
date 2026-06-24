@@ -35,50 +35,61 @@ class AdaptiveTimeMask(torch.nn.Module):
         return cloned
 
 
-class VideoTransform:
-    """subset: "train" (augment), "test" (center crop), "roi" (pre-cropped
-    mouth-ROI input of any resolution -- resize to 88, no crop).
+def _resize(size):
+    return FunctionalModule(
+        lambda x: x
+        if x.shape[-2:] == (size, size)
+        else torch.nn.functional.interpolate(x, size=(size, size), mode="bilinear", align_corners=False)
+    )
 
-    frame_size: model input resolution appended as a final resize when it
-    differs from 88 (the device architecture consumes 44x44 frames)."""
+
+class VideoTransform:
+    """subset: "train" (augment), "test"/"roi" (deterministic).
+
+    frame_size selects the spatial geometry, which must be CONSISTENT across
+    train, eval, and the pretrained init:
+      - 88 (recipe / Conv3D frontend): crop-based geometry on 88x88 mouth ROIs
+        (RandomCrop train, CenterCrop test) -- the conv frontend tolerates the
+        translation jitter.
+      - 44 (device / Linear frontend): the frontend is a flattened Linear and
+        is position-sensitive, so every path RESIZES THE WHOLE FRAME DIRECTLY
+        to 44x44 (no 88 crop), matching the pretrained device_avsr face
+        pipeline and keeping train == eval. Train augmentation stays temporal
+        (hflip + time mask), not spatial.
+    """
 
     def __init__(self, subset, frame_size=88):
-        if subset == "train":
-            self.pipeline = torch.nn.Sequential(
-                FunctionalModule(lambda x: x / 255.0),
-                torchvision.transforms.RandomCrop(88),
-                torchvision.transforms.RandomHorizontalFlip(0.5),
-                torchvision.transforms.Grayscale(),
-                AdaptiveTimeMask(10, 25),
-                torchvision.transforms.Normalize(0.421, 0.165),
-            )
-        elif subset == "roi":
-            self.pipeline = torch.nn.Sequential(
-                FunctionalModule(lambda x: x / 255.0),
-                FunctionalModule(
-                    lambda x: x
-                    if x.shape[-2:] == (88, 88)
-                    else torch.nn.functional.interpolate(x, size=(88, 88), mode="bilinear", align_corners=False)
-                ),
-                torchvision.transforms.Grayscale(),
-                torchvision.transforms.Normalize(0.421, 0.165),
-            )
+        div = FunctionalModule(lambda x: x / 255.0)
+        gray = torchvision.transforms.Grayscale()
+        norm = torchvision.transforms.Normalize(0.421, 0.165)
+
+        if frame_size == 88:
+            if subset == "train":
+                self.pipeline = torch.nn.Sequential(
+                    div,
+                    torchvision.transforms.RandomCrop(88),
+                    torchvision.transforms.RandomHorizontalFlip(0.5),
+                    gray,
+                    AdaptiveTimeMask(10, 25),
+                    norm,
+                )
+            elif subset == "roi":
+                self.pipeline = torch.nn.Sequential(div, _resize(88), gray, norm)
+            else:
+                self.pipeline = torch.nn.Sequential(div, torchvision.transforms.CenterCrop(88), gray, norm)
         else:
-            self.pipeline = torch.nn.Sequential(
-                FunctionalModule(lambda x: x / 255.0),
-                torchvision.transforms.CenterCrop(88),
-                torchvision.transforms.Grayscale(),
-                torchvision.transforms.Normalize(0.421, 0.165),
-            )
-        if frame_size != 88:
-            self.pipeline = torch.nn.Sequential(
-                self.pipeline,
-                FunctionalModule(
-                    lambda x: torch.nn.functional.interpolate(
-                        x, size=(frame_size, frame_size), mode="bilinear", align_corners=False
-                    )
-                ),
-            )
+            # device: direct resize to frame_size for every subset
+            if subset == "train":
+                self.pipeline = torch.nn.Sequential(
+                    div,
+                    _resize(frame_size),
+                    torchvision.transforms.RandomHorizontalFlip(0.5),
+                    gray,
+                    AdaptiveTimeMask(10, 25),
+                    norm,
+                )
+            else:
+                self.pipeline = torch.nn.Sequential(div, _resize(frame_size), gray, norm)
 
     def __call__(self, video):
         return self.pipeline(video)

@@ -298,10 +298,26 @@ class StreamingInferencePipeline:
         audio_window: torch.Tensor,
         trim_frames: int = 0,
     ) -> Tuple[str, str, int]:
-        """Run one streaming step. Returns (full transcript, new text, n_feats)."""
+        """Run one streaming step. Returns (full transcript, new text, n_feats).
+
+        Records a per-stage timing breakdown in self.last_timings
+        {preprocess, frontend, decode} seconds (GPU-synced when on CUDA)."""
+        import time as _time
+
+        cuda = self.device.type == "cuda"
+
+        def _sync():
+            if cuda:
+                torch.cuda.synchronize()
+
+        t0 = _time.perf_counter()
         video = self.preprocessor(video_window).to(self.device)
         audio = audio_window.float().to(self.device)
+        _sync()
+        t1 = _time.perf_counter()
         feats = self.backend.features(audio, video, trim_frames)
+        _sync()
+        t2 = _time.perf_counter()
         length = torch.tensor([feats.size(1)], device=self.device)
 
         if not self.carry_state:
@@ -309,6 +325,9 @@ class StreamingInferencePipeline:
         self.hypotheses, self.state = self.decoder.infer(
             feats, length, self.beam_width, state=self.state, hypothesis=self.hypotheses
         )
+        _sync()
+        t3 = _time.perf_counter()
+        self.last_timings = {"preprocess": t1 - t0, "frontend": t2 - t1, "decode": t3 - t2}
 
         if self.carry_state:
             full = self.token_processor(self.hypotheses[0][0], lstrip=True)

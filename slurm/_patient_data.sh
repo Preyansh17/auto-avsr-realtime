@@ -97,6 +97,14 @@ for f in "${RAW_TRAIN_FILE}" "${RAW_VAL_FILE}"; do
   [[ -s "${f}" ]] || { echo "[FATAL] Missing label CSV: ${f}" >&2; exit 4; }
 done
 
+# Optional: point media at a different crop of the SAME split (e.g. face crops
+# produced by scripts/face_crop_patient.py) while keeping the original labels.
+# PATIENT_DATA_ROOT replaces ROOT_DIR for legal/legacy; for merged, set
+# PATIENT_DATA_ROOT to a root that already has the per-source subdirs.
+if [[ -n "${PATIENT_DATA_ROOT:-}" ]]; then
+  ROOT_DIR="${PATIENT_DATA_ROOT}"
+fi
+
 # Re-tokenized CSVs the streaming trainer consumes. Written to a user-owned
 # dir (not next to the source: the th3482 data roots are read-only for you).
 LABELS_OUT_DIR="${LABELS_OUT_DIR:-/scratch/${USER}/avsr_realtime/labels/${DATASET_TAG}}"
