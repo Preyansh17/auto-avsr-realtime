@@ -14,6 +14,7 @@ demo_videos/*
 # auto-avsr-realtime
 .venv/
 __pycache__/
+.kiro/
 cpts/
 exp/
 outputs/

@@ -40,8 +40,10 @@ class OnlineAVSRModule(LightningModule):
         # frontend on 44x44 face crops, 12-layer Emformer, segment 32/rc 4).
         self.architecture = getattr(args, "architecture", "recipe") or "recipe"
         # "audiovisual" (default) | "audio" | "video". Unimodal builds only the
-        # one frontend and feeds its 512-dim features straight to the Emformer
-        # (no fusion); reuses the pretrained frontend + RNN-T via strict=False.
+        # present frontend but KEEPS the pretrained fusion module, zero-filling
+        # the absent stream so the Emformer always sees fusion-space features
+        # (the modality-dropout setup the published AV model was trained with).
+        # Reuses the pretrained frontend(s) + fusion + RNN-T via strict=False.
         self.modality = getattr(args, "modality", "audiovisual") or "audiovisual"
         need_audio = self.modality in ("audio", "audiovisual")
         need_video = self.modality in ("video", "audiovisual")
@@ -51,7 +53,7 @@ class OnlineAVSRModule(LightningModule):
             self.right_context_length = 4 if rc is None else int(rc)
             self.audio_frontend = audio_resnet() if need_audio else None
             self.video_frontend = video_linear() if need_video else None
-            self.fusion = fusion_module(hidden_dim=1024) if self.modality == "audiovisual" else None
+            self.fusion = fusion_module(hidden_dim=1024)
             self.model = emformer_rnnt_device(
                 segment_length=self.segment_length,
                 right_context_length=self.right_context_length,
@@ -61,7 +63,7 @@ class OnlineAVSRModule(LightningModule):
             self.right_context_length = int(getattr(args, "right_context_length", 0) or 0)
             self.audio_frontend = audio_resnet() if need_audio else None
             self.video_frontend = video_resnet() if need_video else None
-            self.fusion = fusion_module() if self.modality == "audiovisual" else None
+            self.fusion = fusion_module()
             self.model = emformer_rnnt(
                 segment_length=self.segment_length,
                 right_context_length=self.right_context_length,
@@ -106,15 +108,23 @@ class OnlineAVSRModule(LightningModule):
         return decoder
 
     def encode_av(self, audios, videos):
+        # Unimodal modes zero-fill the absent stream and run the result through
+        # the pretrained fusion module, so the Emformer always sees in-distribution
+        # fusion-space features. Feeding a raw 512-d frontend output straight to the
+        # Emformer (the old unimodal path) is out-of-distribution and unrecoverable
+        # under frozen-base LoRA, which is why audio-only never trained (val_loss
+        # stuck ~38, transcripts decoupled from input). Cat order is [video, audio].
         if self.modality == "audio":
-            feats = self.audio_frontend(audios)
+            audio_features = self.audio_frontend(audios)
+            video_features = torch.zeros_like(audio_features)
         elif self.modality == "video":
-            feats = self.video_frontend(videos)
+            video_features = self.video_frontend(videos)
+            audio_features = torch.zeros_like(video_features)
         else:
             video_features = self.video_frontend(videos)
             audio_features = self.audio_frontend(audios)
-            length = min(video_features.size(1), audio_features.size(1))
-            feats = self.fusion(torch.cat([video_features[:, :length], audio_features[:, :length]], dim=-1))
+        length = min(video_features.size(1), audio_features.size(1))
+        feats = self.fusion(torch.cat([video_features[:, :length], audio_features[:, :length]], dim=-1))
         if feats.size(1) <= 0:
             raise ValueError("Frontend produced no frames")
         return feats
