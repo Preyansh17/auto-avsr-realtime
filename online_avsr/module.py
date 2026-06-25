@@ -164,7 +164,11 @@ class OnlineAVSRModule(LightningModule):
             prepended_targets,
             prepended_target_lengths,
         )
-        loss = self.loss(output, batch.targets, src_lengths, batch.target_lengths)
+        # torchaudio's rnnt_loss kernel only accepts fp32/fp16 logits and
+        # rejects bfloat16 ("logits must be float32 or float16"), so bf16-mixed
+        # AMP crashes here. Cast to fp32 for the loss: required for bf16-mixed,
+        # a no-op for fp32, and strictly safer for fp16 (loss computed in fp32).
+        loss = self.loss(output.float(), batch.targets, src_lengths, batch.target_lengths)
         self.log(f"{step_type}_loss", loss, on_step=True, on_epoch=True, prog_bar=(step_type == "val"))
         return loss
 
