@@ -263,24 +263,22 @@ def main():
         if args.lora:
             # Fold adapters into plain Linear weights -> standard checkpoint
             # for eval.py / demo_realtime.py (last.ckpt keeps the LoRA form
-            # for resuming). Merge from the BEST checkpoint (lowest val_loss),
-            # NOT the in-memory last-epoch weights: on these small patient sets
-            # the schedule overfits hard in late epochs (val_loss climbs ~15 ->
-            # 60), so the final weights are far worse than the best epoch.
-            best_path = getattr(trainer.checkpoint_callback, "best_model_path", "")
-            if best_path and os.path.isfile(best_path):
-                best_sd = torch.load(best_path, map_location="cpu")["state_dict"]
-                best_sd = {k: v for k, v in best_sd.items() if not k.startswith("loss.")}
-                missing, unexpected = model.load_state_dict(best_sd, strict=False)
-                if len(missing) > 10:
-                    print(f"WARNING: best-ckpt load missing={len(missing)} unexpected={len(unexpected)}")
-                print(f"Restored best checkpoint for merge: {best_path}")
-            else:
-                print("WARNING: best checkpoint unavailable; merging last-epoch weights")
+            # for resuming).
+            #
+            # NB: we merge the in-memory LAST-epoch weights, NOT the lowest-
+            # val_loss checkpoint. On these patient sets val_loss is ANTI-
+            # correlated with WER: the val_loss-best epoch (just past warmup)
+            # is undertrained for emission and decodes blanks/empty strings on
+            # ~half the clips (WER ~0.8), while later high-val_loss epochs have
+            # learned to emit and score far better (WER ~0.42). Selecting by
+            # val_loss therefore HURTS WER -- verified on j11714048/j11706594.
+            # The real fix is the LR schedule (see schedulers.py / module.py:
+            # total_epochs is taken from --epochs=10000 so cosine never decays)
+            # and/or WER-based checkpoint selection; until then, last wins.
             merged = merge_lora(model)
             merged_path = os.path.join(run_dir, "model_lora_merged.pth")
             torch.save({"state_dict": model.state_dict(), "lora": manifest["lora"]}, merged_path)
-            print(f"Merged {merged} LoRA layers (from best) -> {merged_path}")
+            print(f"Merged {merged} LoRA layers -> {merged_path}")
         elif args.ensemble_last:
             avg_path = ensemble(run_dir, last_n=args.ensemble_last)
             print(f"Averaged checkpoint: {avg_path}" if avg_path else "Too few checkpoints to average.")
