@@ -263,11 +263,24 @@ def main():
         if args.lora:
             # Fold adapters into plain Linear weights -> standard checkpoint
             # for eval.py / demo_realtime.py (last.ckpt keeps the LoRA form
-            # for resuming).
+            # for resuming). Merge from the BEST checkpoint (lowest val_loss),
+            # NOT the in-memory last-epoch weights: on these small patient sets
+            # the schedule overfits hard in late epochs (val_loss climbs ~15 ->
+            # 60), so the final weights are far worse than the best epoch.
+            best_path = getattr(trainer.checkpoint_callback, "best_model_path", "")
+            if best_path and os.path.isfile(best_path):
+                best_sd = torch.load(best_path, map_location="cpu")["state_dict"]
+                best_sd = {k: v for k, v in best_sd.items() if not k.startswith("loss.")}
+                missing, unexpected = model.load_state_dict(best_sd, strict=False)
+                if len(missing) > 10:
+                    print(f"WARNING: best-ckpt load missing={len(missing)} unexpected={len(unexpected)}")
+                print(f"Restored best checkpoint for merge: {best_path}")
+            else:
+                print("WARNING: best checkpoint unavailable; merging last-epoch weights")
             merged = merge_lora(model)
             merged_path = os.path.join(run_dir, "model_lora_merged.pth")
             torch.save({"state_dict": model.state_dict(), "lora": manifest["lora"]}, merged_path)
-            print(f"Merged {merged} LoRA layers -> {merged_path}")
+            print(f"Merged {merged} LoRA layers (from best) -> {merged_path}")
         elif args.ensemble_last:
             avg_path = ensemble(run_dir, last_n=args.ensemble_last)
             print(f"Averaged checkpoint: {avg_path}" if avg_path else "Too few checkpoints to average.")
