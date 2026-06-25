@@ -44,7 +44,16 @@ class LandmarksDetector:
                 bbox_size = (bbox[2] - bbox[0]) + (bbox[3] - bbox[1])
                 if bbox_size > max_size:
                     max_id, max_size = idx, bbox_size
-                lmx = [[int(bboxC.xmin * iw), int(bboxC.ymin * ih)], [int(bboxC.width * iw), int(bboxC.height * ih)]]
+                # Two alignment points for VideoProcess: bbox TOP-LEFT and
+                # bbox BOTTOM-RIGHT corners. The second point must be a
+                # coordinate (xmin+width, ymin+height), NOT the raw (width,
+                # height) size -- feeding the size warps the affine crop to a
+                # random region (e.g. the background), producing face crops that
+                # contain no face. See git history for the window-crop bug.
+                lmx = [
+                    [int(bboxC.xmin * iw), int(bboxC.ymin * ih)],
+                    [int((bboxC.xmin + bboxC.width) * iw), int((bboxC.ymin + bboxC.height) * ih)],
+                ]
                 face_points.append(lmx)
             landmarks.append(np.reshape(np.array(face_points[max_id]), (2, 2)))
         return landmarks
