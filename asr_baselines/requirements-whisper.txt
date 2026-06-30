@@ -1,0 +1,11 @@
+# Phase 2 (Whisper) deps. Install into a SEPARATE env from the AV torch-2.6 env.
+# Whisper finetune is fine on a recent torch; pin transformers for the
+# Seq2SeqTrainer + WhisperProcessor API used in whisper_finetune.py.
+transformers>=4.44,<5
+datasets>=2.20
+accelerate>=0.33
+jiwer>=3.0
+evaluate>=0.4
+librosa>=0.10
+soundfile>=0.12
+pyyaml

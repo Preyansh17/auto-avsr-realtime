@@ -1,0 +1,17 @@
+# Green-style SpecAugment for dysarthric speech (Interspeech 2021, Euphonia).
+# Frequency masking cut, time masking blown up vs LibriSpeech defaults.
+# Sweep these in the Phase-1 ablation; lock the winner for Whisper/Nemotron.
+specaugment:
+  enabled: true
+  freq_mask_param: 13      # mel-bin width per freq mask (LibriSpeech: 27)
+  n_freq_masks: 1          # (LibriSpeech: 2)
+  time_mask_param: 40      # frame width per time mask (LibriSpeech: 100)
+  n_time_masks: 10         # (LibriSpeech: 2)  <-- the big lever
+  time_mask_p: 0.5         # max fraction of frames masked total
+
+# Equivalent knobs when mapping onto the model-native SpecAugment:
+#   Whisper (HF WhisperConfig): apply_spec_augment=true,
+#     mask_feature_prob (freq) LOW, mask_feature_length ~13, mask_feature_min_masks=1
+#     mask_time_prob (time) HIGH, mask_time_length ~40
+#   NeMo (Nemotron spec_augment block):
+#     freq_masks=1, freq_width=13, time_masks=10, time_width=0.05 (fraction)

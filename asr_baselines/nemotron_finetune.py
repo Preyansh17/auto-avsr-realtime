@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Finetune NVIDIA Nemotron streaming ASR on patient dysarthric speech.
+
+Model: nvidia/nemotron-speech-streaming-en-0.6b -- a cache-aware
+FastConformer-RNNT (24 encoder layers), the streaming RNN-T analog to Green et
+al.'s finetuned RNN-T. This is the streaming audio baseline the AV Emformer
+must beat.
+
+Green recipe applied here:
+  * train only the first N FastConformer encoder layers (default 5), freeze the
+    rest of the encoder + the decoder/joint;
+  * SpecAugment with cut frequency masking, blown-up time masking (NeMo's native
+    spec_augment block, set from CLI -> mirrors specaug_green.yaml).
+
+NeMo's API shifts between releases; the version-sensitive spots are marked. Pin
+via requirements-nemotron.txt and run in its OWN env (NeMo pins a torch that
+clashes with the AV torch-2.6 env).
+
+  python -m asr_baselines.nemotron_finetune \
+    --train-manifest train.jsonl --val-manifest val.jsonl \
+    --output-dir $EXP/nemotron_green --epochs 30 --unfreeze-encoder-layers 5
+"""
+
+import argparse
+import os
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--model", default="nvidia/nemotron-speech-streaming-en-0.6b")
+    p.add_argument("--train-manifest", required=True)
+    p.add_argument("--val-manifest", required=True)
+    p.add_argument("--output-dir", required=True)
+    p.add_argument("--epochs", type=int, default=30)
+    p.add_argument("--learning-rate", type=float, default=1e-4)
+    p.add_argument("--warmup-steps", type=int, default=200)
+    p.add_argument("--weight-decay", type=float, default=1e-3)
+    p.add_argument("--batch-size", type=int, default=8)
+    p.add_argument("--num-workers", type=int, default=4)
+    p.add_argument("--max-duration", type=float, default=20.0)
+    p.add_argument("--min-duration", type=float, default=0.3)
+    p.add_argument("--precision", default="bf16-mixed")
+    p.add_argument("--gpus", type=int, default=1)
+    p.add_argument("--grad-accum", type=int, default=1)
+    # Green freeze
+    p.add_argument("--unfreeze-encoder-layers", type=int, default=5,
+                   help="train encoder layers [0, N); -1 = train all")
+    p.add_argument("--freeze-decoder", action="store_true", default=True)
+    p.add_argument("--train-decoder", dest="freeze_decoder", action="store_false")
+    # Cache-aware streaming context (left,right) in frames; keep model default if unset.
+    p.add_argument("--att-context-size", type=int, nargs=2, default=None,
+                   help="e.g. 70 13 ; default keeps the pretrained streaming context")
+    # SpecAugment (NeMo native). Green-leaning: heavy time, light freq.
+    p.add_argument("--no-specaug", action="store_true")
+    p.add_argument("--freq-masks", type=int, default=1)
+    p.add_argument("--freq-width", type=int, default=13)
+    p.add_argument("--time-masks", type=int, default=10)
+    p.add_argument("--time-width", type=float, default=0.05, help="fraction of frames per time mask")
+    return p.parse_args()
+
+
+def set_spec_augment(model, args):
+    from omegaconf import open_dict
+
+    if args.no_specaug:
+        # Replace with identity by zeroing masks.
+        with open_dict(model.cfg):
+            model.cfg.spec_augment.freq_masks = 0
+            model.cfg.spec_augment.time_masks = 0
+        model.spec_augmentation = model.from_config_dict(model.cfg.spec_augment)
+        print("SpecAugment: DISABLED (ablation)")
+        return
+    with open_dict(model.cfg):
+        sa = model.cfg.spec_augment
+        sa.freq_masks = args.freq_masks
+        sa.freq_width = args.freq_width
+        sa.time_masks = args.time_masks
+        sa.time_width = args.time_width
+    model.spec_augmentation = model.from_config_dict(model.cfg.spec_augment)
+    print(f"SpecAugment: freq(masks={args.freq_masks}, width={args.freq_width}) "
+          f"time(masks={args.time_masks}, width={args.time_width})")
+
+
+def apply_freeze(model, args):
+    n = args.unfreeze_encoder_layers
+    if n == -1 and not args.freeze_decoder:
+        print("Freeze: full finetune")
+        return
+    for prm in model.parameters():
+        prm.requires_grad = False
+    # FastConformer encoder layers live in model.encoder.layers (ConformerLayer list).
+    layers = model.encoder.layers
+    train_idx = range(len(layers)) if n == -1 else range(min(n, len(layers)))
+    for i in train_idx:
+        for prm in layers[i].parameters():
+            prm.requires_grad = True
+    if not args.freeze_decoder:
+        for mod in (model.decoder, model.joint):
+            for prm in mod.parameters():
+                prm.requires_grad = True
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    print(f"Freeze: training encoder layers {list(train_idx)} "
+          f"(decoder frozen={args.freeze_decoder}); "
+          f"trainable {trainable/1e6:.2f}M / {total/1e6:.2f}M ({trainable/total:.1%})")
+
+
+def main():
+    args = parse_args()
+    import nemo.collections.asr as nemo_asr
+    import pytorch_lightning as pl
+    from omegaconf import open_dict
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    model = nemo_asr.models.ASRModel.from_pretrained(args.model)
+
+    # Data
+    with open_dict(model.cfg):
+        model.cfg.train_ds.manifest_filepath = args.train_manifest
+        model.cfg.train_ds.batch_size = args.batch_size
+        model.cfg.train_ds.num_workers = args.num_workers
+        model.cfg.train_ds.max_duration = args.max_duration
+        model.cfg.train_ds.min_duration = args.min_duration
+        model.cfg.train_ds.shuffle = True
+        model.cfg.validation_ds.manifest_filepath = args.val_manifest
+        model.cfg.validation_ds.batch_size = args.batch_size
+        model.cfg.validation_ds.num_workers = args.num_workers
+        model.cfg.validation_ds.shuffle = False
+    model.setup_training_data(model.cfg.train_ds)
+    model.setup_validation_data(model.cfg.validation_ds)
+
+    # Streaming context (optional)
+    if args.att_context_size is not None and hasattr(model.encoder, "set_default_att_context_size"):
+        model.encoder.set_default_att_context_size(list(args.att_context_size))
+        print(f"att_context_size set to {args.att_context_size}")
+
+    set_spec_augment(model, args)
+    apply_freeze(model, args)
+
+    # Optimizer / schedule
+    with open_dict(model.cfg):
+        model.cfg.optim.lr = args.learning_rate
+        model.cfg.optim.weight_decay = args.weight_decay
+        if "sched" in model.cfg.optim and model.cfg.optim.sched is not None:
+            model.cfg.optim.sched.warmup_steps = args.warmup_steps
+    model.setup_optimization(model.cfg.optim)
+
+    trainer = pl.Trainer(
+        devices=args.gpus,
+        accelerator="gpu" if args.gpus > 0 else "cpu",
+        max_epochs=args.epochs,
+        precision=args.precision,
+        accumulate_grad_batches=args.grad_accum,
+        log_every_n_steps=10,
+        enable_checkpointing=True,
+        default_root_dir=args.output_dir,
+        gradient_clip_val=1.0,
+    )
+    model.set_trainer(trainer)
+    trainer.fit(model)
+
+    out = os.path.join(args.output_dir, "nemotron_patient.nemo")
+    model.save_to(out)
+    print(f"Saved finetuned model -> {out}")
+
+
+if __name__ == "__main__":
+    main()

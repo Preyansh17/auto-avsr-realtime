@@ -1,0 +1,9 @@
+# Phase 3 (Nemotron) deps. Install in its OWN env -- NeMo pins a torch that
+# clashes with the AV torch-2.6 env AND with the Whisper env. Do not mix.
+#
+# NeMo is heavy; prefer the NVIDIA NeMo container on HPC if available, else:
+nemo_toolkit[asr]>=2.0
+pytorch-lightning>=2.0
+omegaconf>=2.3
+jiwer>=3.0
+# torch/torchaudio come pinned by nemo_toolkit; do not override.
