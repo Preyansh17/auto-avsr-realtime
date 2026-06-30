@@ -84,10 +84,12 @@ def build_trainer(args, run_dir):
     from pytorch_lightning import Trainer
     from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 
-    # Select checkpoints by val_wer (the real objective) when available; fall
-    # back to val_loss only if WER decoding is disabled. val_loss is a poor
-    # selector here -- it bottoms out while the model still emits blanks.
-    if args.val_wer:
+    # Default: name/rank checkpoints by val_loss but merge the LAST epoch (see
+    # main) -- the proven recipe (41.7% on ROI legal). --select-by-wer is OPT-IN
+    # and switches to val_wer monitoring + early stop + merge-best; it produces
+    # nicer val curves but REGRESSED streaming WER in practice, so it's off by
+    # default. (val_wer is still logged for visibility unless --no-val-wer.)
+    if args.select_by_wer:
         monitor, mode, fname = "val_wer", "min", "{epoch}-{val_wer:.4f}"
     else:
         monitor, mode, fname = "val_loss", "min", "{epoch}-{val_loss:.4f}"
@@ -100,9 +102,7 @@ def build_trainer(args, run_dir):
         filename=fname,
     )
     callbacks = [checkpoint, LearningRateMonitor(logging_interval="step")]
-    if args.val_wer and args.early_stop_patience > 0:
-        # Stop once WER stops improving; the best-WER checkpoint is kept either
-        # way, this just avoids burning epochs deep into loss-divergence.
+    if args.select_by_wer and args.early_stop_patience > 0:
         callbacks.append(
             EarlyStopping(monitor="val_wer", mode="min", patience=args.early_stop_patience, min_delta=0.001)
         )
@@ -168,6 +168,10 @@ def parse_args():
     parser.add_argument("--pretrained-model-path", default=os.environ.get("PRETRAINED_MODEL_PATH") or None)
     parser.add_argument("--ensemble-last", type=int, default=10,
                         help="Average the last N epoch checkpoints after training (0 to disable)")
+    parser.add_argument("--specaug", action="store_true",
+                        default=os.environ.get("SPECAUG", "0") == "1",
+                        help="Green-style SpecAugment: heavier waveform/video time masking + "
+                             "fusion-feature time+channel masking (training only)")
     parser.add_argument("--lora", action="store_true",
                         help="Freeze the pretrained weights and train low-rank adapters only")
     parser.add_argument("--lora-r", type=int, default=8)
@@ -176,11 +180,19 @@ def parse_args():
     parser.add_argument("--lora-scopes", nargs="+", default=["encoder", "predictor", "joiner", "fusion"],
                         choices=sorted(SCOPE_PREFIXES) + ["all"])
     parser.add_argument("--no-val-wer", dest="val_wer", action="store_false",
-                        help="Disable per-epoch val WER decoding (then checkpoints select by val_loss)")
+                        help="Disable per-epoch val WER decoding/logging (faster validation)")
     parser.set_defaults(val_wer=True)
+    parser.add_argument("--select-by-wer", action="store_true",
+                        default=os.environ.get("SELECT_BY_WER", "0") == "1",
+                        help="OPT-IN: monitor/early-stop on val_wer + merge best epoch "
+                             "(default: monitor val_loss, merge LAST epoch -- the proven recipe)")
+    parser.add_argument("--anneal-lr", action="store_true",
+                        default=os.environ.get("ANNEAL_LR", "0") == "1",
+                        help="OPT-IN: anneal cosine LR over --max-steps "
+                             "(default off: constant high LR streams better in practice)")
     parser.add_argument("--early-stop-patience", type=int,
                         default=int(os.environ.get("EARLY_STOP_PATIENCE", "12")),
-                        help="Stop after this many val epochs without val_wer improvement (0=off)")
+                        help="With --select-by-wer: stop after this many val epochs w/o val_wer improvement (0=off)")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -236,6 +248,7 @@ def main():
         "precision": args.precision,
         "learning_rate": args.learning_rate,
         "max_frames": args.max_frames,
+        "specaug": args.specaug,
         "lora": {
             "enabled": args.lora,
             "r": args.lora_r,
@@ -261,6 +274,7 @@ def main():
         limit=args.max_videos,
         max_frames=args.max_frames,
         frame_size=args.frame_size,
+        specaug=args.specaug,
     )
     model = OnlineAVSRModule(args=args, sp_model=sp_model)
     if args.pretrained_model_path:
@@ -283,12 +297,12 @@ def main():
         if args.lora:
             # Fold adapters into plain Linear weights -> standard checkpoint
             # for eval.py / demo_realtime.py (last.ckpt keeps the LoRA form
-            # for resuming). Merge from the best checkpoint when selection is by
-            # val_wer (the right objective); fall back to last-epoch weights when
-            # WER selection is off, since val_loss-best is a blank-emitter and
-            # merging it HURTS WER (verified on j11714048/j11706594).
+            # for resuming). DEFAULT: merge the LAST-epoch weights -- the proven
+            # recipe (val_loss-best and val_wer-best both under-train for
+            # streaming; the long constant-LR endpoint streams best). Only
+            # --select-by-wer merges the best-val_wer checkpoint instead.
             best_path = getattr(trainer.checkpoint_callback, "best_model_path", "")
-            if args.val_wer and best_path and os.path.isfile(best_path):
+            if args.select_by_wer and best_path and os.path.isfile(best_path):
                 best_sd = torch.load(best_path, map_location="cpu")["state_dict"]
                 best_sd = {k: v for k, v in best_sd.items() if not k.startswith("loss.")}
                 missing, _ = model.load_state_dict(best_sd, strict=False)
@@ -296,7 +310,7 @@ def main():
                     print(f"WARNING: best-ckpt load missing={len(missing)} keys")
                 print(f"Restored best-WER checkpoint for merge: {best_path}")
             else:
-                print("Merging last-epoch weights (val_wer off or no best ckpt)")
+                print("Merging last-epoch weights (default recipe)")
             merged = merge_lora(model)
             merged_path = os.path.join(run_dir, "model_lora_merged.pth")
             torch.save({"state_dict": model.state_dict(), "lora": manifest["lora"]}, merged_path)

@@ -17,6 +17,7 @@ from .models import (
     video_resnet,
 )
 from .schedulers import WarmupCosineScheduler
+from .specaug import FeatureSpecAugment
 from .text import post_process_hypotheses
 
 
@@ -76,6 +77,12 @@ class OnlineAVSRModule(LightningModule):
         self.compute_val_wer = bool(getattr(args, "val_wer", True)) if args is not None else True
         self._val_wer_sum = 0.0
         self._val_wer_count = 0
+        # SpecAugment in fusion-feature space (training only). Off by default;
+        # --specaug turns it on. Green et al. (Interspeech 2021) dysarthric
+        # recipe: heavy TIME masking on the frame axis, light CHANNEL masking on
+        # the feature axis (the no-mel analog of frequency masking). Pairs with
+        # the heavier waveform/video time-masking in transforms.py.
+        self.specaug = FeatureSpecAugment() if getattr(args, "specaug", False) else None
 
     def configure_optimizers(self):
         args = self.args
@@ -100,14 +107,15 @@ class OnlineAVSRModule(LightningModule):
             / self.trainer.num_devices
             / self.trainer.num_nodes
         )
-        # When training is bounded by --max-steps (the patient runs set
-        # --epochs=10000 so max_steps is the real stop), anneal the cosine over
-        # max_steps, NOT over 10000 epochs. Otherwise total_steps is ~100x the
-        # actual run, the cosine advances <2%, the LR never decays, and val_loss
-        # diverges 15->60 in late epochs. Anneal over the true horizon so the LR
-        # decays to ~0 by the end and training can settle.
+        # OPT-IN (--anneal-lr, default OFF). When enabled, anneal the cosine over
+        # --max-steps instead of --epochs(=10000). This makes val_loss/val_wer
+        # converge cleanly BUT empirically REGRESSES streaming WER (41.7% -> ~60%
+        # on ROI legal): the constant-high-LR "divergent" schedule trains the
+        # model hard enough to decode well in streaming mode (less future context
+        # than utterance), which the low-LR tail of an annealed run never reaches.
+        # So the default keeps the constant-high-LR behavior that actually wins.
         max_steps = int(getattr(args, "max_steps", 0) or 0)
-        if max_steps > 0 and steps_per_epoch > 0:
+        if getattr(args, "anneal_lr", False) and max_steps > 0 and steps_per_epoch > 0:
             total_epochs = max(warmup_epochs + 1, math.ceil(max_steps / steps_per_epoch))
         scheduler = WarmupCosineScheduler(optimizer, warmup_epochs, total_epochs, steps_per_epoch)
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
@@ -179,6 +187,8 @@ class OnlineAVSRModule(LightningModule):
         prepended_target_lengths = batch.target_lengths + 1
 
         fused = self.encode_av(batch.audios, batch.videos)
+        if step_type == "train" and self.specaug is not None:
+            fused = self.specaug(fused)
         feature_lengths = self._feature_lengths(batch).to(device=self.device, dtype=torch.int32)
         output, src_lengths, _, _ = self.model(
             self._pad_right_context(fused),
