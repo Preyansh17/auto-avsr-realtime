@@ -46,6 +46,30 @@ Best checkpoint per training regime selected by val loss. All evals use `--prepr
 
 ---
 
+## Ablation: Face crops vs Mouth-ROI crops (legal_only, AV LoRA)
+
+Controlled comparison — identical config (r=8, α=16, scopes=all, 5700 steps, lr=5e-4)
+and identical labels. Only the **video crop type** differs. Face crops were
+re-derived from the `_normalized_25p` originals (298/298 cropped, 0 detection failures).
+
+| Run | Crop type | Data root | Legal WER |
+|---|---|---|---|
+| j11706594 | **Mouth-ROI** | `patient_legal298_crops_unseen` | **42.1%** |
+| j11714048 | Face | `legal_only_facecrop` | 59.6% |
+
+**Conclusion: keep mouth-ROI crops.** The handoff hypothesis was that the
+face-vs-mouth-ROI distribution shift (the pretrained device_avsr frontend saw
+*face* crops) was the primary WER floor, so re-cropping to faces should help.
+The experiment shows the **opposite** — mouth-ROI beats face by ~17.5pp.
+
+Likely cause: **effective resolution on the lips.** At 44×44, a face crop spends
+most pixels on eyes/forehead/cheeks; the lips (where the lip-reading signal lives)
+occupy a small fraction. A mouth-ROI crop fills the frame with lips. Since LoRA
+adapts the frontend to whatever it is trained on, "more lip pixels" outweighs
+"matches the pretraining distribution." The face-crop alignment idea is dropped.
+
+---
+
 ## Full Fine-Tune (legal_only, 268 train clips)
 
 lr=1e-4, batch=2, grad-accum=4, all 24.7 M params trainable.

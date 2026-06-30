@@ -9,7 +9,7 @@
 #SBATCH --error=/scratch/pa2753/auto-avsr/output/%x_%j.err
 #SBATCH --mail-user=pa2753@nyu.edu
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --account=torch_pr_39_tandon_advanced
+#SBATCH --account=torch_pr_39_general
 
 # Streaming (Emformer RNN-T) analog of
 # train_patient_av_lora_legal298_exp1_all_pa2753_outputs.sbatch.
@@ -46,7 +46,7 @@ export LORA_R="${LORA_R:-8}"
 export LORA_ALPHA="${LORA_ALPHA:-16}"
 export LORA_DROPOUT="${LORA_DROPOUT:-0.05}"
 export LORA_SCOPES="${LORA_SCOPES:-all}"          # offline exp1 "all" == every trainable block
-export MAX_STEPS="${MAX_STEPS:-5700}"
+export MAX_STEPS="${MAX_STEPS:-2850}"
 export RESUME_FROM_CHECKPOINT="${RESUME_FROM_CHECKPOINT:-}"
 export MAX_EPOCHS="${MAX_EPOCHS:-10000}"
 export BATCH_SIZE="${BATCH_SIZE:-2}"
