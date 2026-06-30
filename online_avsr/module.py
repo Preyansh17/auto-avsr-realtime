@@ -1,4 +1,5 @@
 import itertools
+import math
 from collections import namedtuple
 
 import torch
@@ -69,6 +70,12 @@ class OnlineAVSRModule(LightningModule):
                 right_context_length=self.right_context_length,
             )
         self.loss = torchaudio.transforms.RNNTLoss(reduction="sum")
+        # val_loss anti-correlates with WER on these sets (low-loss epochs
+        # over-emit blanks), so we also decode the val set each epoch and select
+        # checkpoints by val_wer instead. Accumulators reset each val epoch.
+        self.compute_val_wer = bool(getattr(args, "val_wer", True)) if args is not None else True
+        self._val_wer_sum = 0.0
+        self._val_wer_count = 0
 
     def configure_optimizers(self):
         args = self.args
@@ -93,6 +100,15 @@ class OnlineAVSRModule(LightningModule):
             / self.trainer.num_devices
             / self.trainer.num_nodes
         )
+        # When training is bounded by --max-steps (the patient runs set
+        # --epochs=10000 so max_steps is the real stop), anneal the cosine over
+        # max_steps, NOT over 10000 epochs. Otherwise total_steps is ~100x the
+        # actual run, the cosine advances <2%, the LR never decays, and val_loss
+        # diverges 15->60 in late epochs. Anneal over the true horizon so the LR
+        # decays to ~0 by the end and training can settle.
+        max_steps = int(getattr(args, "max_steps", 0) or 0)
+        if max_steps > 0 and steps_per_epoch > 0:
+            total_epochs = max(warmup_epochs + 1, math.ceil(max_steps / steps_per_epoch))
         scheduler = WarmupCosineScheduler(optimizer, warmup_epochs, total_epochs, steps_per_epoch)
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
 
@@ -114,6 +130,12 @@ class OnlineAVSRModule(LightningModule):
         # Emformer (the old unimodal path) is out-of-distribution and unrecoverable
         # under frozen-base LoRA, which is why audio-only never trained (val_loss
         # stuck ~38, transcripts decoupled from input). Cat order is [video, audio].
+        #
+        # NB: the pretrained device_avsr model was trained AUDIO-VISUAL with no
+        # modality dropout (separate ASR/VSR/AV-ASR checkpoints exist upstream;
+        # we bootstrap the AV one), so a zeroed stream is still off-distribution
+        # for it -- zero-fill is the least-bad approximation, not a trained mode,
+        # which is why audio-only (~45% WER) trails true AV (~42%).
         if self.modality == "audio":
             audio_features = self.audio_frontend(audios)
             video_features = torch.zeros_like(audio_features)
@@ -175,8 +197,48 @@ class OnlineAVSRModule(LightningModule):
     def training_step(self, batch, batch_idx):
         return self._step(batch, "train")
 
+    def on_validation_epoch_start(self):
+        self._val_wer_sum = 0.0
+        self._val_wer_count = 0
+
     def validation_step(self, batch, batch_idx):
-        return self._step(batch, "val")
+        loss = self._step(batch, "val")
+        if self.compute_val_wer:
+            self._accumulate_val_wer(batch)
+        return loss
+
+    @torch.no_grad()
+    def _accumulate_val_wer(self, batch):
+        """Greedy-decode each val clip and accumulate WER vs the reference.
+
+        WER (not val_loss) is the checkpoint-selection signal: val_loss bottoms
+        out while the model still emits blanks, so loss-best != WER-best. Greedy
+        (beam_width=1) keeps this cheap; relative ranking tracks beam decoding.
+        """
+        from .text import compute_wer
+
+        for i in range(batch.targets.size(0)):
+            try:
+                single = AVBatch(
+                    audios=batch.audios[i : i + 1],
+                    videos=batch.videos[i : i + 1],
+                    audio_lengths=batch.audio_lengths[i : i + 1],
+                    video_lengths=batch.video_lengths[i : i + 1],
+                    targets=batch.targets[i : i + 1],
+                    target_lengths=batch.target_lengths[i : i + 1],
+                )
+                hypothesis = self.forward(single, beam_width=1)
+                ref_ids = batch.targets[i, : batch.target_lengths[i]].tolist()
+                reference = self.sp_model.decode([int(t) for t in ref_ids])
+                self._val_wer_sum += compute_wer(reference, hypothesis)
+                self._val_wer_count += 1
+            except Exception:
+                continue
+
+    def on_validation_epoch_end(self):
+        if self.compute_val_wer and self._val_wer_count > 0:
+            # Single-GPU runs; manual mean is fine (no cross-rank reduction).
+            self.log("val_wer", self._val_wer_sum / self._val_wer_count, prog_bar=True)
 
     def _pad_right_context(self, fused):
         """Emformer's non-streaming forward expects utterances right-padded

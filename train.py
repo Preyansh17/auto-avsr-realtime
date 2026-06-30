@@ -82,16 +82,30 @@ def ensure_sp_model(args, train_file, val_file) -> str:
 
 def build_trainer(args, run_dir):
     from pytorch_lightning import Trainer
-    from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+    from pytorch_lightning.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
 
+    # Select checkpoints by val_wer (the real objective) when available; fall
+    # back to val_loss only if WER decoding is disabled. val_loss is a poor
+    # selector here -- it bottoms out while the model still emits blanks.
+    if args.val_wer:
+        monitor, mode, fname = "val_wer", "min", "{epoch}-{val_wer:.4f}"
+    else:
+        monitor, mode, fname = "val_loss", "min", "{epoch}-{val_loss:.4f}"
     checkpoint = ModelCheckpoint(
         dirpath=run_dir,
-        monitor="val_loss",
-        mode="min",
+        monitor=monitor,
+        mode=mode,
         save_last=True,
         save_top_k=10,
-        filename="{epoch}-{val_loss:.4f}",
+        filename=fname,
     )
+    callbacks = [checkpoint, LearningRateMonitor(logging_interval="step")]
+    if args.val_wer and args.early_stop_patience > 0:
+        # Stop once WER stops improving; the best-WER checkpoint is kept either
+        # way, this just avoids burning epochs deep into loss-divergence.
+        callbacks.append(
+            EarlyStopping(monitor="val_wer", mode="min", patience=args.early_stop_patience, min_delta=0.001)
+        )
     from pytorch_lightning.strategies import DDPStrategy
 
     strategy = DDPStrategy(find_unused_parameters=False) if args.gpus * args.num_nodes > 1 else "auto"
@@ -106,7 +120,7 @@ def build_trainer(args, run_dir):
         precision=args.precision,
         accumulate_grad_batches=args.accumulate_grad_batches,
         gradient_clip_val=10.0,
-        callbacks=[checkpoint, LearningRateMonitor(logging_interval="step")],
+        callbacks=callbacks,
         sync_batchnorm=args.gpus * args.num_nodes > 1,
     )
 
@@ -161,6 +175,12 @@ def parse_args():
     parser.add_argument("--lora-dropout", type=float, default=0.05)
     parser.add_argument("--lora-scopes", nargs="+", default=["encoder", "predictor", "joiner", "fusion"],
                         choices=sorted(SCOPE_PREFIXES) + ["all"])
+    parser.add_argument("--no-val-wer", dest="val_wer", action="store_false",
+                        help="Disable per-epoch val WER decoding (then checkpoints select by val_loss)")
+    parser.set_defaults(val_wer=True)
+    parser.add_argument("--early-stop-patience", type=int,
+                        default=int(os.environ.get("EARLY_STOP_PATIENCE", "12")),
+                        help="Stop after this many val epochs without val_wer improvement (0=off)")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -263,18 +283,20 @@ def main():
         if args.lora:
             # Fold adapters into plain Linear weights -> standard checkpoint
             # for eval.py / demo_realtime.py (last.ckpt keeps the LoRA form
-            # for resuming).
-            #
-            # NB: we merge the in-memory LAST-epoch weights, NOT the lowest-
-            # val_loss checkpoint. On these patient sets val_loss is ANTI-
-            # correlated with WER: the val_loss-best epoch (just past warmup)
-            # is undertrained for emission and decodes blanks/empty strings on
-            # ~half the clips (WER ~0.8), while later high-val_loss epochs have
-            # learned to emit and score far better (WER ~0.42). Selecting by
-            # val_loss therefore HURTS WER -- verified on j11714048/j11706594.
-            # The real fix is the LR schedule (see schedulers.py / module.py:
-            # total_epochs is taken from --epochs=10000 so cosine never decays)
-            # and/or WER-based checkpoint selection; until then, last wins.
+            # for resuming). Merge from the best checkpoint when selection is by
+            # val_wer (the right objective); fall back to last-epoch weights when
+            # WER selection is off, since val_loss-best is a blank-emitter and
+            # merging it HURTS WER (verified on j11714048/j11706594).
+            best_path = getattr(trainer.checkpoint_callback, "best_model_path", "")
+            if args.val_wer and best_path and os.path.isfile(best_path):
+                best_sd = torch.load(best_path, map_location="cpu")["state_dict"]
+                best_sd = {k: v for k, v in best_sd.items() if not k.startswith("loss.")}
+                missing, _ = model.load_state_dict(best_sd, strict=False)
+                if len(missing) > 10:
+                    print(f"WARNING: best-ckpt load missing={len(missing)} keys")
+                print(f"Restored best-WER checkpoint for merge: {best_path}")
+            else:
+                print("Merging last-epoch weights (val_wer off or no best ckpt)")
             merged = merge_lora(model)
             merged_path = os.path.join(run_dir, "model_lora_merged.pth")
             torch.save({"state_dict": model.state_dict(), "lora": manifest["lora"]}, merged_path)
