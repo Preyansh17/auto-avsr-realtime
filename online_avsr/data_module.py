@@ -22,10 +22,14 @@ class PatientAVCollate:
     frame_size: 88 for the recipe architecture, 44 for the device model.
     """
 
-    def __init__(self, sp_model, subset: str, frame_size: int = 88):
+    def __init__(self, sp_model, subset: str, frame_size: int = 88, specaug: bool = False):
         self.sp_model = sp_model
-        self.video_transform = VideoTransform("train" if subset == "train" else "test", frame_size=frame_size)
-        self.audio_transform = AudioTransform("train" if subset == "train" else "test")
+        train = subset == "train"
+        # specaug only affects the train pipeline (val/test stay deterministic).
+        self.video_transform = VideoTransform(
+            "train" if train else "test", frame_size=frame_size, specaug=specaug and train
+        )
+        self.audio_transform = AudioTransform("train" if train else "test", specaug=specaug and train)
 
     def _target(self, sample):
         token_ids = sample.get("token_ids") or self.sp_model.encode(sample["text"].lower())
@@ -71,6 +75,7 @@ class PatientAVDataModule(LightningDataModule):
         limit: Optional[int] = None,
         max_frames: Optional[int] = 600,
         frame_size: int = 88,
+        specaug: bool = False,
     ):
         super().__init__()
         self.root_dir = root_dir
@@ -83,6 +88,7 @@ class PatientAVDataModule(LightningDataModule):
         self.limit = limit
         self.max_frames = max_frames
         self.frame_size = frame_size
+        self.specaug = specaug
 
     def _loader(self, label_file, subset, shuffle=False):
         ds = PatientAVDataset(
@@ -97,7 +103,9 @@ class PatientAVDataModule(LightningDataModule):
             batch_size=self.batch_size,
             shuffle=shuffle,
             num_workers=self.num_workers,
-            collate_fn=PatientAVCollate(self.sp_model, subset, frame_size=self.frame_size),
+            collate_fn=PatientAVCollate(
+                self.sp_model, subset, frame_size=self.frame_size, specaug=self.specaug
+            ),
             pin_memory=True,
         )
 

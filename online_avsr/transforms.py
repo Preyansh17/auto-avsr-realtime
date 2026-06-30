@@ -58,10 +58,13 @@ class VideoTransform:
         (hflip + time mask), not spatial.
     """
 
-    def __init__(self, subset, frame_size=88):
+    def __init__(self, subset, frame_size=88, specaug=False):
         div = FunctionalModule(lambda x: x / 255.0)
         gray = torchvision.transforms.Grayscale()
         norm = torchvision.transforms.Normalize(0.421, 0.165)
+        # Green-style heavier time masking: wider window + smaller stride => more,
+        # bigger temporal masks per clip. Default keeps the original light mask.
+        window, stride = (12, 12) if specaug else (10, 25)
 
         if frame_size == 88:
             if subset == "train":
@@ -70,7 +73,7 @@ class VideoTransform:
                     torchvision.transforms.RandomCrop(88),
                     torchvision.transforms.RandomHorizontalFlip(0.5),
                     gray,
-                    AdaptiveTimeMask(10, 25),
+                    AdaptiveTimeMask(window, stride),
                     norm,
                 )
             elif subset == "roi":
@@ -85,7 +88,7 @@ class VideoTransform:
                     _resize(frame_size),
                     torchvision.transforms.RandomHorizontalFlip(0.5),
                     gray,
-                    AdaptiveTimeMask(10, 25),
+                    AdaptiveTimeMask(window, stride),
                     norm,
                 )
             else:
@@ -96,10 +99,13 @@ class VideoTransform:
 
 
 class AudioTransform:
-    def __init__(self, subset):
+    def __init__(self, subset, specaug=False):
         self.subset = subset
+        # Green-style heavier time masking: same 0.4s window, half the stride =>
+        # ~2x the temporal masks per second. Default keeps the original light mask.
+        self.window, self.stride = (6400, 8000) if specaug else (6400, 16000)
 
     def __call__(self, audio):
         if self.subset == "train":
-            return AdaptiveTimeMask(6400, 16000)(audio)
+            return AdaptiveTimeMask(self.window, self.stride)(audio)
         return audio
