@@ -12,6 +12,7 @@ Label CSVs must carry 1023-piece token ids
 """
 
 import argparse
+import glob
 import json
 import os
 import sys
@@ -27,7 +28,7 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from online_avsr.average_checkpoints import ensemble  # noqa: E402
+from online_avsr.average_checkpoints import average_checkpoints, ensemble  # noqa: E402
 from online_avsr.checkpoint import (  # noqa: E402
     load_validated_state_dict,
     preflight_environment,
@@ -102,6 +103,17 @@ def build_trainer(args, run_dir):
         filename=fname,
     )
     callbacks = [checkpoint, LearningRateMonitor(logging_interval="step")]
+    if getattr(args, "avg_last_n", 0) and args.avg_last_n > 0:
+        # Separate callback that keeps the last N CONSECUTIVE epochs (ranked by
+        # the logged epoch_idx, not val_loss) so we can average the divergent
+        # endpoint region -- the default top-k-by-val_loss checkpoints are the
+        # early low-loss epochs, the wrong set to average for streaming.
+        callbacks.append(
+            ModelCheckpoint(
+                dirpath=run_dir, monitor="epoch_idx", mode="max",
+                save_top_k=args.avg_last_n, filename="recent-{epoch}", save_last=False,
+            )
+        )
     if args.select_by_wer and args.early_stop_patience > 0:
         callbacks.append(
             EarlyStopping(monitor="val_wer", mode="min", patience=args.early_stop_patience, min_delta=0.001)
@@ -168,6 +180,10 @@ def parse_args():
     parser.add_argument("--pretrained-model-path", default=os.environ.get("PRETRAINED_MODEL_PATH") or None)
     parser.add_argument("--ensemble-last", type=int, default=10,
                         help="Average the last N epoch checkpoints after training (0 to disable)")
+    parser.add_argument("--avg-last-n", type=int, default=int(os.environ.get("AVG_LAST_N", "0")),
+                        help="LoRA: average the last N CONSECUTIVE epoch checkpoints for the merge "
+                             "(instead of betting on the single divergent last epoch). Tames the "
+                             "endpoint-lottery variance. 0 = off (merge last epoch).")
     parser.add_argument("--seed", type=int, default=int(os.environ["SEED"]) if os.environ.get("SEED") else None,
                         help="Seed all RNG (seed_everything, workers=True) for reproducible runs. "
                              "This recipe has ~24pp run-to-run WER variance unseeded -- seed + "
@@ -258,6 +274,7 @@ def main():
         "learning_rate": args.learning_rate,
         "max_frames": args.max_frames,
         "seed": args.seed,
+        "avg_last_n": args.avg_last_n,
         "specaug": args.specaug,
         "lora": {
             "enabled": args.lora,
@@ -319,6 +336,21 @@ def main():
                 if len(missing) > 10:
                     print(f"WARNING: best-ckpt load missing={len(missing)} keys")
                 print(f"Restored best-WER checkpoint for merge: {best_path}")
+            elif getattr(args, "avg_last_n", 0) and args.avg_last_n > 0:
+                recent = sorted(
+                    glob.glob(os.path.join(run_dir, "recent-*.ckpt")), key=os.path.getmtime
+                )[-args.avg_last_n:]
+                if len(recent) >= 2:
+                    avg_sd = average_checkpoints(recent)
+                    avg_sd = {k: v for k, v in avg_sd.items() if not k.startswith("loss.")}
+                    missing, _ = model.load_state_dict(avg_sd, strict=False)
+                    if len(missing) > 10:
+                        print(f"WARNING: avg-ckpt load missing={len(missing)} keys")
+                    print(f"Averaged last {len(recent)} epoch checkpoints for merge: "
+                          f"{[os.path.basename(p) for p in recent]}")
+                else:
+                    print(f"--avg-last-n={args.avg_last_n} but only {len(recent)} recent ckpt(s); "
+                          "merging last-epoch")
             else:
                 print("Merging last-epoch weights (default recipe)")
             merged = merge_lora(model)

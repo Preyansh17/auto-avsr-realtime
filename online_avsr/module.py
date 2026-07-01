@@ -246,6 +246,10 @@ class OnlineAVSRModule(LightningModule):
                 continue
 
     def on_validation_epoch_end(self):
+        # Monotonic epoch counter so a ModelCheckpoint can keep the last-N
+        # CONSECUTIVE epochs (for --avg-last-n endpoint averaging) rather than
+        # the top-k by val_loss.
+        self.log("epoch_idx", float(self.current_epoch))
         if self.compute_val_wer and self._val_wer_count > 0:
             # Single-GPU runs; manual mean is fine (no cross-rank reduction).
             self.log("val_wer", self._val_wer_sum / self._val_wer_count, prog_bar=True)
