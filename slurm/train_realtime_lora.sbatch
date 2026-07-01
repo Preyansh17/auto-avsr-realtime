@@ -55,6 +55,7 @@ export PRECISION="${PRECISION:-16-mixed}"
 export LEARNING_RATE="${LEARNING_RATE:-0.0005}"
 export NUM_WORKERS="${NUM_WORKERS:-4}"
 export SPECAUG="${SPECAUG:-0}"   # 1 -> Green-style SpecAugment (ablation)
+export SEED="${SEED:-}"           # set an int for reproducible runs (recipe is ~24pp variance unseeded)
 export OVERLAY_EXT3="${OVERLAY_EXT3:-/scratch/pa2753/avsr/avsr.ext3}"
 export SIF_IMAGE="${SIF_IMAGE:-/share/apps/images/cuda12.3.2-cudnn9.0.0-ubuntu-22.04.4.sif}"
 
@@ -62,6 +63,8 @@ export SIF_IMAGE="${SIF_IMAGE:-/share/apps/images/cuda12.3.2-cudnn9.0.0-ubuntu-2
 
 SPECAUG_FLAG=""
 [[ "${SPECAUG}" == "1" ]] && SPECAUG_FLAG="--specaug"
+SEED_FLAG=""
+[[ -n "${SEED}" ]] && SEED_FLAG="--seed ${SEED}"
 
 echo "Starting streaming LoRA run at $(date) on $(hostname)"
 echo "EXP_NAME=${EXP_NAME}  LORA_SCOPES=${LORA_SCOPES}  MAX_STEPS=${MAX_STEPS}  SPECAUG=${SPECAUG}"
@@ -101,6 +104,6 @@ python train.py \
   --precision "'"${PRECISION}"'" \
   --learning-rate "'"${LEARNING_RATE}"'" \
   --num-workers "'"${NUM_WORKERS}"'" \
-  '"${SPECAUG_FLAG}"'
+  '"${SPECAUG_FLAG}"' '"${SEED_FLAG}"'
 '
 echo "Finished at $(date)"

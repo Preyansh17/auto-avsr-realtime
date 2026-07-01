@@ -168,6 +168,10 @@ def parse_args():
     parser.add_argument("--pretrained-model-path", default=os.environ.get("PRETRAINED_MODEL_PATH") or None)
     parser.add_argument("--ensemble-last", type=int, default=10,
                         help="Average the last N epoch checkpoints after training (0 to disable)")
+    parser.add_argument("--seed", type=int, default=int(os.environ["SEED"]) if os.environ.get("SEED") else None,
+                        help="Seed all RNG (seed_everything, workers=True) for reproducible runs. "
+                             "This recipe has ~24pp run-to-run WER variance unseeded -- seed + "
+                             "run multiple seeds to measure anything.")
     parser.add_argument("--specaug", action="store_true",
                         default=os.environ.get("SPECAUG", "0") == "1",
                         help="Green-style SpecAugment: heavier waveform/video time masking + "
@@ -199,6 +203,11 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.seed is not None:
+        from pytorch_lightning import seed_everything
+
+        seed_everything(args.seed, workers=True)
+        print(f"seed_everything({args.seed}, workers=True)")
     if args.architecture is None:
         args.architecture = "device" if args.model_source == "bootstrap" else "recipe"
     if args.frame_size is None:
@@ -248,6 +257,7 @@ def main():
         "precision": args.precision,
         "learning_rate": args.learning_rate,
         "max_frames": args.max_frames,
+        "seed": args.seed,
         "specaug": args.specaug,
         "lora": {
             "enabled": args.lora,
