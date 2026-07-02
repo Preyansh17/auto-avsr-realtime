@@ -50,6 +50,11 @@ export PRECISION="${PRECISION:-bf16}"
 export UNFREEZE_ENCODER_LAYERS="${UNFREEZE_ENCODER_LAYERS:-5}"
 export SPECAUG="${SPECAUG:-1}"        # 0 -> ablation, disable SpecAugment
 export NUM_WORKERS="${NUM_WORKERS:-4}"
+# NB: HF_HOME is commonly already exported in the login shell (e.g. to
+# /scratch/$USER/.huggingface) and sbatch inherits it -- this default only
+# applies if truly unset. Pre-cache models (whisper_finetune needs internet;
+# compute nodes usually don't have it) into WHATEVER HF_HOME actually resolves
+# to at submit time, not blindly into this fallback path.
 export HF_HOME="${HF_HOME:-/scratch/${USER}/hf_cache}"
 
 SPECAUG_FLAG=""
