@@ -9,3 +9,4 @@ evaluate>=0.4
 librosa>=0.10
 soundfile>=0.12
 pyyaml
+sentencepiece>=0.1.99  # patient_audio.py reuses online_avsr.text's SPM decoder

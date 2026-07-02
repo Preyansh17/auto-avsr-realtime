@@ -220,7 +220,14 @@ def main():
         weight_decay=args.weight_decay,
         num_train_epochs=args.epochs,
         max_steps=args.max_steps,
+        # use_reentrant=False: with most of the model frozen (Green freeze),
+        # the reentrant (legacy) checkpointing implementation loses the
+        # gradient at frozen->trainable boundaries ("element 0 of tensors does
+        # not require grad") because it needs an upstream requires_grad=True
+        # tensor to rebuild the graph on recompute; non-reentrant checkpointing
+        # doesn't have that requirement.
         gradient_checkpointing=True,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         fp16=(args.precision == "fp16"),
         bf16=(args.precision == "bf16"),
         eval_strategy="epoch",
