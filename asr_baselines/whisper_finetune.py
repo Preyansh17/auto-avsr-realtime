@@ -61,6 +61,11 @@ def parse_args():
     p.add_argument("--precision", choices=["fp32", "fp16", "bf16"], default="bf16")
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--gen-num-beams", type=int, default=1)
+    p.add_argument("--seed", type=int, default=int(os.environ["SEED"]) if os.environ.get("SEED") else 42,
+                   help="Seeds transformers/torch/numpy/random via set_seed, and the "
+                        "Trainer's own data shuffling. The AV recipe in this repo has "
+                        "~24pp unseeded WER variance; seed here too so runs are "
+                        "reproducible and comparable across conditions.")
     # Green freeze: train first N encoder layers, freeze the rest + decoder.
     p.add_argument("--unfreeze-encoder-layers", type=int, default=5,
                    help="train encoder layers [0, N); 0 = freeze whole encoder; -1 = train all")
@@ -165,7 +170,11 @@ def main():
         Seq2SeqTrainingArguments,
         WhisperForConditionalGeneration,
         WhisperProcessor,
+        set_seed,
     )
+
+    set_seed(args.seed)
+    print(f"set_seed({args.seed})")
 
     processor = WhisperProcessor.from_pretrained(args.model, language=args.language, task=args.task)
     model = WhisperForConditionalGeneration.from_pretrained(args.model)
@@ -201,6 +210,8 @@ def main():
 
     training_args = Seq2SeqTrainingArguments(
         output_dir=args.output_dir,
+        seed=args.seed,
+        data_seed=args.seed,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.eval_batch_size,
         gradient_accumulation_steps=args.grad_accum,
