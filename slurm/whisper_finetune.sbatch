@@ -48,6 +48,7 @@ export BATCH_SIZE="${BATCH_SIZE:-8}"
 export GRAD_ACCUM="${GRAD_ACCUM:-2}"
 export PRECISION="${PRECISION:-bf16}"
 export UNFREEZE_ENCODER_LAYERS="${UNFREEZE_ENCODER_LAYERS:-5}"
+export TRAIN_DECODER="${TRAIN_DECODER:-0}"   # 1 -> also unfreeze decoder (with -1 encoder = full finetune)
 export SPECAUG="${SPECAUG:-1}"        # 0 -> ablation, disable SpecAugment
 export NUM_WORKERS="${NUM_WORKERS:-4}"
 # NB: HF_HOME is commonly already exported in the login shell (e.g. to
@@ -59,11 +60,13 @@ export HF_HOME="${HF_HOME:-/scratch/${USER}/hf_cache}"
 
 SPECAUG_FLAG=""
 [[ "${SPECAUG}" == "0" ]] && SPECAUG_FLAG="--no-specaug"
+TRAIN_DECODER_FLAG=""
+[[ "${TRAIN_DECODER}" == "1" ]] && TRAIN_DECODER_FLAG="--train-decoder"
 
 [[ -x "${WHISPER_PY}" ]] || { echo "[FATAL] no python at ${WHISPER_PY}; set WHISPER_ENV to the whisper_asr venv" >&2; exit 4; }
 
 echo "Starting Whisper finetune at $(date) on $(hostname)"
-echo "WHISPER_ENV=${WHISPER_ENV} MODEL=${WHISPER_MODEL} EXP_NAME=${EXP_NAME} SPECAUG=${SPECAUG} UNFREEZE=${UNFREEZE_ENCODER_LAYERS}"
+echo "WHISPER_ENV=${WHISPER_ENV} MODEL=${WHISPER_MODEL} EXP_NAME=${EXP_NAME} SPECAUG=${SPECAUG} UNFREEZE=${UNFREEZE_ENCODER_LAYERS} TRAIN_DECODER=${TRAIN_DECODER}"
 [[ "${DRY_RUN:-0}" == "1" ]] && { echo "DRY_RUN=1, not launching."; exit 0; }
 
 cd "${PROJECT_ROOT}"
@@ -86,7 +89,7 @@ export PYTHONNOUSERSITE=1
   --precision "${PRECISION}" \
   --unfreeze-encoder-layers "${UNFREEZE_ENCODER_LAYERS}" \
   --num-workers "${NUM_WORKERS}" \
-  ${SPECAUG_FLAG}
+  ${SPECAUG_FLAG} ${TRAIN_DECODER_FLAG}
 
 "${WHISPER_PY}" -m asr_baselines.whisper_eval \
   --model "${EXP_DIR}/${EXP_NAME}/best" \
