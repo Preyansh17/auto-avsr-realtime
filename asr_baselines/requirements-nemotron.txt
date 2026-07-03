@@ -34,3 +34,14 @@ jiwer>=3.0
 # resolution:
 #   pip install --no-user "numba==0.60.0"
 numba==0.60.0
+#
+# numba-cuda: since numba 0.59, CUDA target support lives in this SEPARATE
+# package (kept up to date with new CUDA releases independently of numba
+# itself) -- NOT installed by numba or nemo_toolkit automatically. Without it,
+# numba.cuda's real-GPU code path segfaults hard (no Python exception) on a
+# very recent CUDA build (confirmed: identical segfault survived 5 unrelated
+# fix attempts -- RNNT loss backend, precision/AMP, CUDA graphs, dataloader
+# workers, non-fused AdamW -- and was only diagnosed by forcing
+# NUMBA_ENABLE_CUDASIM=1, which routes around real CUDA and turned the segfault
+# into a clean, catchable AttributeError instead). Install explicitly:
+numba-cuda
