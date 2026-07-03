@@ -208,6 +208,18 @@ def main():
     with open_dict(model.cfg):
         model.cfg.optim.lr = args.learning_rate
         model.cfg.optim.weight_decay = args.weight_decay
+        # Force the plain (non-fused, non-foreach) AdamW kernel path. With
+        # foreach/fused left at PyTorch's auto-selected default (None, None in
+        # the logged optimizer config), training segfaulted with a hard crash
+        # (not a Python exception) inside torch/optim/adam.py's step() --
+        # confirmed via a faulthandler traceback after ruling out the RNNT
+        # loss backend, precision/AMP, CUDA graphs, and dataloader workers as
+        # causes (identical crash under all of those). On this stack (torch
+        # 2.12.1+cu130 -- a very recent build), the auto-selected fused/foreach
+        # CUDA Adam kernel is the remaining suspect; the plain per-parameter
+        # Python-loop implementation avoids that code path entirely.
+        model.cfg.optim.foreach = False
+        model.cfg.optim.fused = False
         if "sched" in model.cfg.optim and model.cfg.optim.sched is not None:
             model.cfg.optim.sched.warmup_steps = args.warmup_steps
             model.cfg.optim.sched.max_steps = max_steps
