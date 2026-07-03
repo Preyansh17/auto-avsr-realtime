@@ -125,14 +125,24 @@ def main():
     # crashed with a numba CUDA-JIT "Signature mismatch" error. Root cause was
     # numba 0.66.0 (unpinned by nemo_toolkit, resolved to the bleeding-edge
     # latest -- see requirements-nemotron.txt) not being vetted against NeMo's
-    # CUDA kernel code; fixed by pinning numba==0.60.0. A loss_name="pytorch"
-    # swap was tried first, on the mistaken assumption it avoids numba entirely
-    # -- it does NOT (still routes through nemo/collections/asr/parts/numba/
-    # rnnt_loss/rnnt_pytorch.py, a differently-named but still numba-JIT'd
-    # kernel), and combined with the numba downgrade it segfaulted on the
-    # first real training step (validation/sanity-check succeeded, since that
-    # path doesn't hit the loss). Left as the default (warprnnt_numba) here,
-    # which is what NeMo actually tests against.
+    # CUDA kernel code; fixed by pinning numba==0.60.0. Left as the default
+    # (warprnnt_numba) here, which is what NeMo actually tests against; a
+    # loss_name="pytorch" swap was tried and reverted (still numba-JIT'd under
+    # a different name, not actually pure PyTorch -- didn't help).
+
+    # After the numba pin, training crashed with a hard segfault (not a Python
+    # exception) at 0 iterations/0 seconds, exactly at the eval->train mode
+    # transition following sanity-check validation. Ruled out precision/AMP as
+    # the cause (identical segfault under --precision 32-true). The remaining
+    # suspect: CUDA graph capture/replay for the greedy RNNT decoder
+    # (GreedyBatchedRNNTInfer), which the logs show toggling "enabled"/
+    # "disabled" right around the crash point -- CUDA graphs are a much more
+    # version/driver-sensitive feature than plain CUDA kernels. Disabled via
+    # the documented use_cuda_graph_decoder config flag.
+    with open_dict(model.cfg):
+        if "decoding" in model.cfg and "greedy" in model.cfg.decoding:
+            model.cfg.decoding.greedy.use_cuda_graph_decoder = False
+    model.change_decoding_strategy(model.cfg.decoding)
 
     # Data
     #
