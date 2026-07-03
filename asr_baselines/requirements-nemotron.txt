@@ -23,3 +23,14 @@ jiwer>=3.0
 # already falls back to a full torchaudio.load() decode when it's missing
 # (see make_nemo_manifest.py), so this is a known, handled compatibility gap,
 # not a bug to fix here.
+#
+# numba: NOT pinned by nemo_toolkit itself (pulled in transitively via
+# librosa/resampy), so pip resolves the latest release with no vetting against
+# NeMo's numba-CUDA-JIT'd RNNT loss kernels. The unpinned latest (0.66.0 as of
+# writing) crashed with a numba internal type-inference error mid-training
+# ("Signature mismatch: N argument types given, but function takes M
+# arguments"). Pin explicitly to a more established release -- install AFTER
+# nemo_toolkit so this downgrade isn't immediately overwritten by its own
+# resolution:
+#   pip install --no-user "numba==0.60.0"
+numba==0.60.0

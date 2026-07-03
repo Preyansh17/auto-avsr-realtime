@@ -121,28 +121,18 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     model = nemo_asr.models.ASRModel.from_pretrained(args.model)
 
-    # The default RNNT loss backend (warprnnt_numba) JIT-compiles CUDA kernels
-    # via numba.cuda -- on this stack (numba 0.66.0, torch cuda 13.0) that JIT
-    # crashes mid-training with "Signature mismatch: 2 argument types given,
-    # but function takes 1 arguments" (confirmed: training started, ran one
-    # epoch step, then crashed inside numba's typeinfer/compiler pipeline --
-    # a numba/CUDA13 compatibility gap, not a bug in this script). Swap to
-    # NeMo's pure-PyTorch RNNT loss backend, which has no JIT step and is
-    # noticeably slower but fully robust -- an acceptable tradeoff for a
-    # ~268-clip finetune. Read num_classes/reduction off the existing loss
-    # instance rather than hardcoding, so this survives model/config changes.
-    from nemo.collections.asr.losses.rnnt import RNNTLoss
-
-    # RNNTLoss stores the num_classes ctor arg as self._blank internally (not
-    # self.num_classes, despite the param name) -- confirmed by reading
-    # nemo/collections/asr/losses/rnnt.py's __init__ directly.
-    orig_num_classes = model.loss._blank
-    model.loss = RNNTLoss(
-        num_classes=orig_num_classes,
-        reduction=getattr(model.loss, "reduction", "mean_batch"),
-        loss_name="pytorch",
-    )
-    print(f"RNNT loss backend: pytorch (num_classes={orig_num_classes})")
+    # NOTE on RNNT loss backend: NeMo's default (warprnnt_numba) originally
+    # crashed with a numba CUDA-JIT "Signature mismatch" error. Root cause was
+    # numba 0.66.0 (unpinned by nemo_toolkit, resolved to the bleeding-edge
+    # latest -- see requirements-nemotron.txt) not being vetted against NeMo's
+    # CUDA kernel code; fixed by pinning numba==0.60.0. A loss_name="pytorch"
+    # swap was tried first, on the mistaken assumption it avoids numba entirely
+    # -- it does NOT (still routes through nemo/collections/asr/parts/numba/
+    # rnnt_loss/rnnt_pytorch.py, a differently-named but still numba-JIT'd
+    # kernel), and combined with the numba downgrade it segfaulted on the
+    # first real training step (validation/sanity-check succeeded, since that
+    # path doesn't hit the loss). Left as the default (warprnnt_numba) here,
+    # which is what NeMo actually tests against.
 
     # Data
     #
