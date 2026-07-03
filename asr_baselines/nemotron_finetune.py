@@ -122,10 +122,18 @@ def main():
         model.cfg.train_ds.max_duration = args.max_duration
         model.cfg.train_ds.min_duration = args.min_duration
         model.cfg.train_ds.shuffle = True
+        # The pretrained model's saved config has use_bucketing=True with
+        # num_buckets=null; newer NeMo's Lhotse dataloader schema validates
+        # num_buckets as a required int when bucketing is on and rejects None
+        # ("Incompatible value 'None' for field of type 'int'"). Bucketing is a
+        # throughput optimization for large multi-hour corpora anyway --
+        # irrelevant for this ~268-clip patient set, so just disable it.
+        model.cfg.train_ds.use_bucketing = False
         model.cfg.validation_ds.manifest_filepath = args.val_manifest
         model.cfg.validation_ds.batch_size = args.batch_size
         model.cfg.validation_ds.num_workers = args.num_workers
         model.cfg.validation_ds.shuffle = False
+        model.cfg.validation_ds.use_bucketing = False
     model.setup_training_data(model.cfg.train_ds)
     model.setup_validation_data(model.cfg.validation_ds)
 

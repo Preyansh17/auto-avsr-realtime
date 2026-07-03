@@ -6,4 +6,20 @@ nemo_toolkit[asr]>=2.0
 pytorch-lightning>=2.0
 omegaconf>=2.3
 jiwer>=3.0
-# torch/torchaudio come pinned by nemo_toolkit; do not override.
+# nemo_toolkit does NOT pull in torchaudio -- install matching the installed
+# torch build explicitly, e.g.:
+#   pip install torchaudio --index-url https://download.pytorch.org/whl/cu130
+# (match the cuXXX suffix to whatever torch version nemo_toolkit pulled in --
+# check with `python -c "import torch; print(torch.__version__)"` first).
+#
+# Recent torchaudio (>=2.9ish) moved load/save entirely onto torchcodec, which
+# needs REAL FFmpeg shared libraries (libavutil.so etc), not just a pip
+# package -- torchaudio.load()/.save() raise ModuleNotFoundError otherwise.
+# pip can't provide these; install via conda-forge instead:
+#   conda install -p <env> -c conda-forge "ffmpeg<8"
+#   pip install torchcodec --index-url https://download.pytorch.org/whl/cu130
+#
+# torchaudio.info() no longer exists on this stack -- asr_baselines code
+# already falls back to a full torchaudio.load() decode when it's missing
+# (see make_nemo_manifest.py), so this is a known, handled compatibility gap,
+# not a bug to fix here.
