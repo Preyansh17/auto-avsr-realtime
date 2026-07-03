@@ -108,7 +108,14 @@ def apply_freeze(model, args):
 def main():
     args = parse_args()
     import nemo.collections.asr as nemo_asr
-    import pytorch_lightning as pl
+    # NeMo's model classes inherit from lightning.pytorch.LightningModule (the
+    # unified "lightning" package), NOT the standalone pytorch_lightning
+    # package -- despite similar naming/history, newer versions of the two
+    # define distinct, non-aliased LightningModule classes. pl.Trainer.fit()
+    # from the wrong package raises "model must be a LightningModule ... got
+    # EncDecRNNTBPEModel" since the isinstance check fails across packages.
+    # Confirmed via ASRModel.__mro__ on the installed nemo_toolkit 2.7.3.
+    import lightning.pytorch as pl
     from omegaconf import open_dict
 
     os.makedirs(args.output_dir, exist_ok=True)
