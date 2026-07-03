@@ -56,6 +56,11 @@ def parse_args():
     p.add_argument("--freq-width", type=int, default=13)
     p.add_argument("--time-masks", type=int, default=10)
     p.add_argument("--time-width", type=float, default=0.05, help="fraction of frames per time mask")
+    p.add_argument("--seed", type=int, default=int(os.environ["SEED"]) if os.environ.get("SEED") else None,
+                   help="Seed all RNG (lightning.pytorch.seed_everything) for reproducible runs. "
+                        "Same rationale as train.py/whisper_finetune.py -- this repo's recipes have "
+                        "shown large unseeded run-to-run WER variance; seed + multi-seed runs are "
+                        "needed to measure anything.")
     return p.parse_args()
 
 
@@ -107,6 +112,11 @@ def apply_freeze(model, args):
 
 def main():
     args = parse_args()
+    if args.seed is not None:
+        from lightning.pytorch import seed_everything
+
+        seed_everything(args.seed, workers=True)
+        print(f"seed_everything({args.seed}, workers=True)")
     import nemo.collections.asr as nemo_asr
     # NeMo's model classes inherit from lightning.pytorch.LightningModule (the
     # unified "lightning" package), NOT the standalone pytorch_lightning
