@@ -166,12 +166,30 @@ def main():
     apply_freeze(model, args)
 
     # Optimizer / schedule
+    #
+    # NeMo's scheduler setup auto-derives max_steps from len(train_dataloader.
+    # dataset) when not given explicitly -- but Lhotse's dynamic/streaming
+    # dataset (LhotseSpeechToTextBpeDataset) has no __len__ by design (lazy
+    # sampling), so that auto-derivation crashes with "TypeError: object of
+    # type 'LhotseSpeechToTextBpeDataset' has no len()" the moment the
+    # Trainer's own configure_optimizers() hook re-runs setup_optimization()
+    # internally. Compute max_steps ourselves from the manifest line count
+    # (a reasonable approximation -- Lhotse's duration-based dynamic batching
+    # means the true per-epoch step count varies slightly, but the scheduler
+    # only needs a sane nonzero target, not an exact one) and set it
+    # explicitly so NeMo never needs the dataset length.
+    with open(args.train_manifest, encoding="utf-8") as f:
+        num_train_examples = sum(1 for line in f if line.strip())
+    steps_per_epoch = max(1, num_train_examples // args.batch_size)
+    max_steps = steps_per_epoch * args.epochs
     with open_dict(model.cfg):
         model.cfg.optim.lr = args.learning_rate
         model.cfg.optim.weight_decay = args.weight_decay
         if "sched" in model.cfg.optim and model.cfg.optim.sched is not None:
             model.cfg.optim.sched.warmup_steps = args.warmup_steps
+            model.cfg.optim.sched.max_steps = max_steps
     model.setup_optimization(model.cfg.optim)
+    print(f"train examples={num_train_examples} steps_per_epoch={steps_per_epoch} max_steps={max_steps}")
 
     trainer = pl.Trainer(
         devices=args.gpus,
