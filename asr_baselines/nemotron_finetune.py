@@ -123,17 +123,21 @@ def main():
         model.cfg.train_ds.min_duration = args.min_duration
         model.cfg.train_ds.shuffle = True
         # The pretrained model's saved config has use_bucketing=True with
-        # num_buckets=null; newer NeMo's Lhotse dataloader schema validates
-        # num_buckets as a required int when bucketing is on and rejects None
-        # ("Incompatible value 'None' for field of type 'int'"). Bucketing is a
-        # throughput optimization for large multi-hour corpora anyway --
-        # irrelevant for this ~268-clip patient set, so just disable it.
+        # num_buckets=null. Newer NeMo's LhotseDataLoadingConfig schema types
+        # num_buckets as a bare (non-Optional) int, so OmegaConf.merge rejects
+        # the None value at schema-validation time -- BEFORE any use_bucketing
+        # check runs, so disabling bucketing alone doesn't avoid the crash.
+        # Must also give num_buckets a real int. Bucketing is a throughput
+        # optimization for large multi-hour corpora anyway -- irrelevant for
+        # this ~268-clip patient set, so disable it and set a harmless value.
         model.cfg.train_ds.use_bucketing = False
+        model.cfg.train_ds.num_buckets = 1
         model.cfg.validation_ds.manifest_filepath = args.val_manifest
         model.cfg.validation_ds.batch_size = args.batch_size
         model.cfg.validation_ds.num_workers = args.num_workers
         model.cfg.validation_ds.shuffle = False
         model.cfg.validation_ds.use_bucketing = False
+        model.cfg.validation_ds.num_buckets = 1
     model.setup_training_data(model.cfg.train_ds)
     model.setup_validation_data(model.cfg.validation_ds)
 
