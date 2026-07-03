@@ -45,3 +45,13 @@ numba==0.60.0
 # NUMBA_ENABLE_CUDASIM=1, which routes around real CUDA and turned the segfault
 # into a clean, catchable AttributeError instead). Install explicitly:
 numba-cuda
+#
+# LD_LIBRARY_PATH: the conda-forge ffmpeg install above puts libavutil.so etc.
+# under <env>/lib. `conda activate` normally adds this to LD_LIBRARY_PATH
+# automatically; the sbatch template calls the venv's python directly (no
+# activate, deliberately, to dodge module-load complexity), so this must be
+# set explicitly: `export LD_LIBRARY_PATH="<env>/lib:${LD_LIBRARY_PATH:-}"`.
+# Missing this breaks torchcodec's dlopen() specifically on FRESH compute
+# nodes -- it can silently work in an interactive login-node shell that has
+# leftover env state from installing ffmpeg there, masking the gap until a
+# real sbatch job (a clean environment) hits it.

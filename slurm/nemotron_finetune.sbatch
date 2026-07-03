@@ -75,6 +75,16 @@ echo "NEMO_ENV=${NEMO_ENV} MODEL=${NEMO_MODEL} EXP_NAME=${EXP_NAME} SPECAUG=${SP
 
 cd "${PROJECT_ROOT}"
 export PYTHONNOUSERSITE=1
+# make_nemo_manifest.py's duration fallback (torchaudio.info() doesn't exist on
+# this stack -> falls back to torchaudio.load(), which routes through
+# torchcodec, which dlopen()s the conda-forge-installed libavutil.so etc.).
+# Those libs live under NEMO_ENV/lib; conda activate normally adds this to
+# LD_LIBRARY_PATH automatically, but we call the venv python directly (no
+# activate) specifically to avoid the module-load complexity, so it must be
+# set explicitly -- confirmed missing this breaks manifest building on a fresh
+# compute node (worked interactively on the login node only because that shell
+# had leftover env state from installing ffmpeg there).
+export LD_LIBRARY_PATH="${NEMO_ENV}/lib:${LD_LIBRARY_PATH:-}"
 
 [[ -s "${TRAIN_FILE}" ]] || "${NEMO_PY}" scripts/regenerate_patient_labels.py --old-csv "${RAW_TRAIN_FILE}" --out "${TRAIN_FILE}"
 [[ -s "${VAL_FILE}" ]]   || "${NEMO_PY}" scripts/regenerate_patient_labels.py --old-csv "${RAW_VAL_FILE}" --out "${VAL_FILE}"
