@@ -115,6 +115,22 @@ def main():
     model = nemo_asr.models.ASRModel.from_pretrained(args.model)
 
     # Data
+    #
+    # The pretrained model's saved train_ds/validation_ds config has several
+    # bucketing-related keys set to null (num_buckets, bucket_buffer_size,
+    # bucket_duration_bins, bucket_batch_size, batch_duration, max_tps,
+    # shuffle_buffer_size). Newer NeMo's LhotseDataLoadingConfig schema types
+    # these as bare (non-Optional) ints/floats, so OmegaConf.merge rejects each
+    # None value one at a time at schema-validation time (confirmed by hitting
+    # num_buckets first, then bucket_buffer_size next -- whack-a-mole if fixed
+    # one at a time). Deleting the null keys entirely lets the dataclass
+    # schema's own defaults fill in during the merge instead of an explicit
+    # None override. Bucketing itself is a throughput optimization for large
+    # multi-hour corpora, irrelevant for this ~268-clip patient set.
+    _bucketing_keys = (
+        "num_buckets", "bucket_buffer_size", "bucket_duration_bins",
+        "bucket_batch_size", "batch_duration", "max_tps", "shuffle_buffer_size",
+    )
     with open_dict(model.cfg):
         model.cfg.train_ds.manifest_filepath = args.train_manifest
         model.cfg.train_ds.batch_size = args.batch_size
@@ -122,22 +138,15 @@ def main():
         model.cfg.train_ds.max_duration = args.max_duration
         model.cfg.train_ds.min_duration = args.min_duration
         model.cfg.train_ds.shuffle = True
-        # The pretrained model's saved config has use_bucketing=True with
-        # num_buckets=null. Newer NeMo's LhotseDataLoadingConfig schema types
-        # num_buckets as a bare (non-Optional) int, so OmegaConf.merge rejects
-        # the None value at schema-validation time -- BEFORE any use_bucketing
-        # check runs, so disabling bucketing alone doesn't avoid the crash.
-        # Must also give num_buckets a real int. Bucketing is a throughput
-        # optimization for large multi-hour corpora anyway -- irrelevant for
-        # this ~268-clip patient set, so disable it and set a harmless value.
         model.cfg.train_ds.use_bucketing = False
-        model.cfg.train_ds.num_buckets = 1
         model.cfg.validation_ds.manifest_filepath = args.val_manifest
         model.cfg.validation_ds.batch_size = args.batch_size
         model.cfg.validation_ds.num_workers = args.num_workers
         model.cfg.validation_ds.shuffle = False
         model.cfg.validation_ds.use_bucketing = False
-        model.cfg.validation_ds.num_buckets = 1
+        for key in _bucketing_keys:
+            model.cfg.train_ds.pop(key, None)
+            model.cfg.validation_ds.pop(key, None)
     model.setup_training_data(model.cfg.train_ds)
     model.setup_validation_data(model.cfg.validation_ds)
 
