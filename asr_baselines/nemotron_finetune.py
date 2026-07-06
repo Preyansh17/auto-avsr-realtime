@@ -179,7 +179,19 @@ def main():
         model.cfg.train_ds.min_duration = args.min_duration
         model.cfg.train_ds.shuffle = True
         model.cfg.train_ds.use_bucketing = False
+        # The pretrained model's saved train_ds/validation_ds config default to
+        # text_field="answer" (visible in the printed config at model-load
+        # time) -- some fine-tuning use case's manifest convention, not the
+        # standard ASR "text" field. make_nemo_manifest.py writes
+        # {"audio_filepath", "duration", "text"}; without this override, every
+        # training/validation example's target transcript is silently missing,
+        # and both freeze and full-finetune configs (3 seeds each, 6 runs
+        # total) collapsed to identical WER=102.7568% (predicting only "⁇"
+        # unknown-token placeholders for every input) -- a data-wiring bug, not
+        # a training-dynamics one.
+        model.cfg.train_ds.text_field = "text"
         model.cfg.validation_ds.manifest_filepath = args.val_manifest
+        model.cfg.validation_ds.text_field = "text"
         model.cfg.validation_ds.batch_size = args.batch_size
         model.cfg.validation_ds.num_workers = args.num_workers
         model.cfg.validation_ds.shuffle = False
