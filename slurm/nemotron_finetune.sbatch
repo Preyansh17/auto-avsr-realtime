@@ -89,6 +89,12 @@ export LD_LIBRARY_PATH="${NEMO_ENV}/lib:${LD_LIBRARY_PATH:-}"
 [[ -s "${TRAIN_FILE}" ]] || "${NEMO_PY}" scripts/regenerate_patient_labels.py --old-csv "${RAW_TRAIN_FILE}" --out "${TRAIN_FILE}"
 [[ -s "${VAL_FILE}" ]]   || "${NEMO_PY}" scripts/regenerate_patient_labels.py --old-csv "${RAW_VAL_FILE}" --out "${VAL_FILE}"
 
+# TEST_FILE: held-out set for the FINAL reported eval, distinct from VAL_FILE
+# (used during training to pick the best-epoch checkpoint via nemotron_finetune.py's
+# SaveBestWER callback). Same rationale/pattern as whisper_finetune.sbatch's
+# TEST_FILE. Defaults to VAL_FILE for back-compat.
+export TEST_FILE="${TEST_FILE:-${VAL_FILE}}"
+
 mkdir -p "${OUT}"
 "${NEMO_PY}" -m asr_baselines.make_nemo_manifest \
   --root-dir "${ROOT_DIR}" --label-file "${TRAIN_FILE}" \
@@ -96,6 +102,13 @@ mkdir -p "${OUT}"
 "${NEMO_PY}" -m asr_baselines.make_nemo_manifest \
   --root-dir "${ROOT_DIR}" --label-file "${VAL_FILE}" \
   --sp-model-path "${SP_MODEL}" --out "${OUT}/val_manifest.jsonl"
+if [[ "${TEST_FILE}" == "${VAL_FILE}" ]]; then
+  cp "${OUT}/val_manifest.jsonl" "${OUT}/test_manifest.jsonl"
+else
+  "${NEMO_PY}" -m asr_baselines.make_nemo_manifest \
+    --root-dir "${ROOT_DIR}" --label-file "${TEST_FILE}" \
+    --sp-model-path "${SP_MODEL}" --out "${OUT}/test_manifest.jsonl"
+fi
 
 "${NEMO_PY}" -m asr_baselines.nemotron_finetune \
   --model "${NEMO_MODEL}" \
@@ -111,9 +124,15 @@ mkdir -p "${OUT}"
   --num-workers "${NUM_WORKERS}" \
   ${SPECAUG_FLAG} ${TRAIN_DECODER_FLAG} ${SEED_FLAG}
 
+# Report on the checkpoint the SELECTION set (VAL_FILE) picked as best,
+# evaluated on the disjoint TEST_FILE -- falls back to the last-epoch
+# checkpoint if val_wer selection never engaged (see nemotron_finetune.py's
+# own WARNING for that case).
+REPORT_CKPT="${OUT}/nemotron_best.nemo"
+[[ -s "${REPORT_CKPT}" ]] || REPORT_CKPT="${OUT}/nemotron_patient.nemo"
 "${NEMO_PY}" -m asr_baselines.nemotron_eval \
-  --model "${OUT}/nemotron_patient.nemo" \
-  --manifest "${OUT}/val_manifest.jsonl" \
-  --out "${OUT}/val_hyps.tsv"
+  --model "${REPORT_CKPT}" \
+  --manifest "${OUT}/test_manifest.jsonl" \
+  --out "${OUT}/test_hyps.tsv"
 
 echo "Finished at $(date)"

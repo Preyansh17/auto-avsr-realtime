@@ -109,8 +109,14 @@ fi
 # dir (not next to the source: the th3482 data roots are read-only for you).
 LABELS_OUT_DIR="${LABELS_OUT_DIR:-/scratch/${USER}/avsr_realtime/labels/${DATASET_TAG}}"
 mkdir -p "${LABELS_OUT_DIR}"
-TRAIN_FILE="${LABELS_OUT_DIR}/$(basename "${RAW_TRAIN_FILE%.csv}")_spm1023.csv"
-VAL_FILE="${LABELS_OUT_DIR}/$(basename "${RAW_VAL_FILE%.csv}")_spm1023.csv"
+# Respect a caller-provided override (e.g. a held-out split for a three-way
+# train/select/test setup) instead of unconditionally clobbering it -- every
+# other var in these sbatch scripts uses this ${VAR:-default} pattern; this
+# one didn't, which silently discarded a VAL_FILE override passed at submit
+# time (caught when a three-way-split Whisper run turned out to still be
+# training against the full un-split val set).
+TRAIN_FILE="${TRAIN_FILE:-${LABELS_OUT_DIR}/$(basename "${RAW_TRAIN_FILE%.csv}")_spm1023.csv}"
+VAL_FILE="${VAL_FILE:-${LABELS_OUT_DIR}/$(basename "${RAW_VAL_FILE%.csv}")_spm1023.csv}"
 
 export PROJECT_ROOT ROOT_DIR RAW_TRAIN_FILE RAW_VAL_FILE TRAIN_FILE VAL_FILE LABELS_OUT_DIR DATASET_TAG RUN_DATA_MODE
 

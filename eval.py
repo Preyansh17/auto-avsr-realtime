@@ -35,7 +35,12 @@ from online_avsr.streaming import (  # noqa: E402
     load_jit_pipeline,
     load_media_file,
 )
-from online_avsr.text import compute_wer, load_sentencepiece_model  # noqa: E402
+from online_avsr.text import (  # noqa: E402
+    compute_wer,
+    levenshtein_distance,
+    load_sentencepiece_model,
+    normalize_text,
+)
 
 
 def parse_args():
@@ -205,12 +210,25 @@ def main():
     ok = [r for r in results if r["event"] == "final"]
     wers = [r["wer"] for r in ok if r.get("wer") is not None]
     rtfs = [r["rtf"] for r in ok if r.get("rtf") is not None]
+
+    # Pooled/corpus WER (total edits / total ref words) -- what jiwer.wer()
+    # computes for the Whisper/Nemotron baselines (asr_baselines/metrics.py).
+    # avg_wer above is a MACRO average of per-clip ratios instead, a different
+    # quantity that over-weights short clips (one dropped word on a 5-word
+    # clip swings that clip's ratio by 0.20). Report both -- corpus_wer is the
+    # one to put next to Whisper/Nemotron numbers in a comparison table.
+    scored = [r for r in ok if r.get("reference")]
+    tot_err = sum(levenshtein_distance(normalize_text(r["reference"]), normalize_text(r["transcript"])) for r in scored)
+    tot_words = sum(len(normalize_text(r["reference"])) for r in scored)
+    corpus_wer = tot_err / tot_words if tot_words else None
+
     summary = {
         "mode": args.mode,
         "model": args.checkpoint or args.jit_model,
         "videos_total": len(records),
         "videos_ok": len(ok),
         "avg_wer": statistics.mean(wers) if wers else None,
+        "corpus_wer": corpus_wer,
         "avg_rtf": statistics.mean(rtfs) if rtfs else None,
         "results_jsonl": jsonl_path,
     }

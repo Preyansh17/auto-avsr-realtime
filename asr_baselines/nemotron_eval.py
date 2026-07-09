@@ -8,9 +8,10 @@ zero-shot baseline.
   python -m asr_baselines.nemotron_eval --model $EXP/nemotron_patient.nemo \
     --manifest val.jsonl --out hyps.tsv
 
-NOTE: this uses offline transcribe(). True cache-aware streaming WER+latency
-(chunked decode with carried state) is a follow-up using NeMo's
-cache_aware_streaming utils; the model is the same, only the decode loop differs.
+NOTE: this uses offline transcribe(). For true cache-aware streaming
+WER+latency (chunked decode with carried state), see
+asr_baselines/nemotron_streaming_eval.py -- same model, only the decode loop
+differs.
 """
 
 import argparse

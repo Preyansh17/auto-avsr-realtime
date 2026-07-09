@@ -75,6 +75,14 @@ export PYTHONNOUSERSITE=1
 [[ -s "${TRAIN_FILE}" ]] || "${WHISPER_PY}" scripts/regenerate_patient_labels.py --old-csv "${RAW_TRAIN_FILE}" --out "${TRAIN_FILE}"
 [[ -s "${VAL_FILE}" ]]   || "${WHISPER_PY}" scripts/regenerate_patient_labels.py --old-csv "${RAW_VAL_FILE}" --out "${VAL_FILE}"
 
+# TEST_FILE: held-out set for the FINAL reported eval, distinct from VAL_FILE
+# (used during training to pick the best-of-N-epochs checkpoint via
+# load_best_model_at_end/metric_for_best_model="wer"). Defaults to VAL_FILE
+# for backward compat (best-of-N selected and reported on the same set --
+# an optimistic bias, confirmed ~4-5pp on real runs). Set TEST_FILE to a
+# disjoint split for an unbiased three-way train/select/test number.
+export TEST_FILE="${TEST_FILE:-${VAL_FILE}}"
+
 "${WHISPER_PY}" -m asr_baselines.whisper_finetune \
   --model "${WHISPER_MODEL}" \
   --root-dir "${ROOT_DIR}" \
@@ -94,7 +102,7 @@ export PYTHONNOUSERSITE=1
 "${WHISPER_PY}" -m asr_baselines.whisper_eval \
   --model "${EXP_DIR}/${EXP_NAME}/best" \
   --root-dir "${ROOT_DIR}" \
-  --label-file "${VAL_FILE}" \
+  --label-file "${TEST_FILE}" \
   --sp-model-path "${SP_MODEL}" \
   --out "${EXP_DIR}/${EXP_NAME}/val_hyps.tsv"
 

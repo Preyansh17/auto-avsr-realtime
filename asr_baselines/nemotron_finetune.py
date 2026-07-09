@@ -64,6 +64,43 @@ def parse_args():
     return p.parse_args()
 
 
+def make_save_best_wer_callback(out_path):
+    """Lightning callback (built lazily, after `lightning` is imported, to
+    keep this script's imports fast for --help): saves a .nemo copy whenever
+    val_wer improves.
+
+    NeMo's RNNT models compute val_wer every validation epoch (rnnt_models.py
+    multi_validation_epoch_end), but nothing in this script ever selected on
+    it -- model.save_to() was called unconditionally after trainer.fit(),
+    i.e. always the LAST epoch, no best-checkpoint tracking at all (unlike
+    Whisper's load_best_model_at_end). This mirrors that HF Trainer behavior
+    using NeMo's own save_to() format directly (avoids depending on Lightning
+    .ckpt restore semantics for a NeMo ModelPT, a separate, less-proven code
+    path in this stack). Degrades safely: if val_wer never shows up in
+    trainer.callback_metrics (untested plumbing on this NeMo version),
+    best_wer stays inf and the caller's fallback (last-epoch-only) kicks in
+    -- printed clearly, not a silent no-op.
+    """
+    from lightning.pytorch import Callback
+
+    class SaveBestWER(Callback):
+        def __init__(self):
+            self.out_path = out_path
+            self.best_wer = float("inf")
+
+        def on_validation_epoch_end(self, trainer, pl_module):
+            wer = trainer.callback_metrics.get("val_wer")
+            if wer is None:
+                return
+            wer = float(wer)
+            if wer < self.best_wer:
+                self.best_wer = wer
+                pl_module.save_to(self.out_path)
+                print(f"[best] epoch={trainer.current_epoch} val_wer={wer:.4f} -> saved {self.out_path}")
+
+    return SaveBestWER()
+
+
 def set_spec_augment(model, args):
     from omegaconf import open_dict
 
@@ -248,6 +285,9 @@ def main():
     model.setup_optimization(model.cfg.optim)
     print(f"train examples={num_train_examples} steps_per_epoch={steps_per_epoch} max_steps={max_steps}")
 
+    best_out = os.path.join(args.output_dir, "nemotron_best.nemo")
+    best_wer_cb = make_save_best_wer_callback(best_out)
+
     trainer = pl.Trainer(
         devices=args.gpus,
         accelerator="gpu" if args.gpus > 0 else "cpu",
@@ -258,13 +298,19 @@ def main():
         enable_checkpointing=True,
         default_root_dir=args.output_dir,
         gradient_clip_val=1.0,
+        callbacks=[best_wer_cb],
     )
     model.set_trainer(trainer)
     trainer.fit(model)
 
     out = os.path.join(args.output_dir, "nemotron_patient.nemo")
     model.save_to(out)
-    print(f"Saved finetuned model -> {out}")
+    print(f"Saved finetuned model (last epoch) -> {out}")
+    if best_wer_cb.best_wer < float("inf"):
+        print(f"Saved finetuned model (best val_wer={best_wer_cb.best_wer:.4f}) -> {best_out}")
+    else:
+        print("WARNING: val_wer never appeared in trainer.callback_metrics -- "
+              "best-checkpoint selection did not engage, only last-epoch was saved")
 
 
 if __name__ == "__main__":

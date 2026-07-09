@@ -11,7 +11,12 @@ def normalize_text(text: str) -> List[str]:
     if text is None:
         return []
     text = text.lower()
-    text = re.sub(r"[^a-z0-9\s']+", " ", text)
+    # Strips apostrophes too (not just other punctuation) -- matches
+    # asr_baselines/metrics.py's normalize() exactly, so "don't" tokenizes as
+    # ["don", "t"] here the same way it does for the Whisper/Nemotron WER, and
+    # cross-architecture WER comparisons aren't silently using two different
+    # word-count conventions.
+    text = re.sub(r"[^a-z0-9\s]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text.split(" ") if text else []
 
