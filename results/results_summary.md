@@ -1,5 +1,14 @@
 # Auto-AVSR Realtime — Experiment Results Summary
 
+> **Superseded.** This is the earliest results snapshot (2026-06-18), kept for
+> historical record only. Two things below are now known wrong: the "41.7%"
+> best result was later found to be an unseeded lucky draw from a recipe with
+> ~24pp run-to-run variance (honest seeded median is ~50%, see
+> `results/week_results_2026-06-23_2026-07-01.md` §10-13), and val_loss-based
+> checkpoint selection was later found to anti-correlate with real WER (§4 of
+> the same file). For current numbers and methodology, start at the main
+> `README.md`'s "Current best results" or `results/week_results_2026-06-23_2026-07-01.md`.
+
 **Date:** 2026-06-18
 **Task:** Fine-tune streaming AV-ASR (Emformer RNN-T) on NYU patient lip-reading data
 **Metric:** Word Error Rate (WER, lower is better), Real-Time Factor (RTF, must be < 1.0)

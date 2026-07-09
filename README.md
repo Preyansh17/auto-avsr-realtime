@@ -18,11 +18,38 @@ and the device_avsr tutorial assets.
 | `online_avsr/` | Core package: model factories, Lightning module, streaming pipeline, transforms, patient dataset/datamodule |
 | `demo_realtime.py` | Stream a video file through the model with incremental transcript + RTF/latency stats |
 | `train.py` / `eval.py` | Fine-tune (or train from scratch) and evaluate on patient data |
+| `asr_baselines/` | Audio-only ASR baselines (Whisper, NVIDIA Nemotron streaming) the AV model is benchmarked against — see `asr_baselines/README.md` |
+| `results/` | Dated investigation write-ups (weekly findings, bug postmortems, open items) — the source of truth for "what's the current best number and why" |
 | `scripts/download_assets.py` | Fetch the pretrained streaming model + SentencePiece vocab |
 | `scripts/bootstrap_from_jit.py` | Convert the pretrained TorchScript model into a fine-tunable eager checkpoint |
 | `scripts/regenerate_patient_labels.py` | Re-tokenize old label CSVs (unigram5000 → spm_unigram_1023) |
-| `slurm/` | NYU HPC templates (singularity + conda) for fine-tune / scratch / eval / label regen |
+| `scripts/merge_lora_ckpt.py` | Merge any saved LoRA epoch checkpoint into plain weights for eval, without retraining |
+| `scripts/read_eval_summary.py` | Read a field (or whole dict) out of an `eval.py` run's `summary.json`, by glob — used by sweep scripts to avoid fragile inline shell quoting |
+| `slurm/` | NYU HPC templates (singularity + conda) for fine-tune / scratch / eval / label regen / checkpoint selection |
 | `preparation/` | Face & mouth-ROI detectors (mediapipe, retinaface, and torchaudio's face-crop variant) |
+
+## Current best results
+
+Streaming WER on patient data, honest (train/val-selection/held-out-test split, no
+double-dipping between checkpoint selection and reporting):
+
+| Model | Legal-only | Merged |
+| --- | --- | --- |
+| **Whisper large-v3 + SpecAugment, full finetune** | **5.5%** | **2.6%** |
+| Whisper medium + SpecAugment, full finetune | 9.8% | 2.6% |
+| AV Emformer, audio-only, LoRA (streaming-selected) | 26.8% | — |
+| Nemotron streaming, full finetune | 33.3% | 31.7% |
+| AV Emformer, audio-visual, LoRA (streaming-selected) | 36.6% | — |
+
+Video does not currently help: audio-only configs beat their audio-visual counterparts
+across every architecture tested. See `results/week_results_2026-06-23_2026-07-01.md`
+(§27-31) and `results/week_results_2026-07-02_2026-07-06.md` for the full investigation,
+including two real methodology bugs found and fixed along the way — a WER metric
+mismatch between architectures (§27) and a checkpoint-selection bias in Whisper's
+default recipe (§28-30) that briefly inflated its headline number before an honest
+three-way split corrected it. `results/whisper_streaming_investigation_2026-07-09.md`
+documents an unresolved attempt at real-time streaming Whisper (blocked, not just
+untried — see that file for the current state and options).
 
 ## Two architectures
 
@@ -107,6 +134,27 @@ overall RTF ≈ 0.2, algorithmic latency = (segment + right context)/25 fps = 1.
    python eval.py --checkpoint exp/run/last.ckpt --mode streaming \
      --root-dir /path/to/patient_data --test-file labels/test_spm1023.csv --preprocess roi
    ```
+   The summary reports both `avg_wer` (macro-average of per-clip WER, kept for back-compat)
+   and `corpus_wer` (pooled: total edits / total ref words — the standard WER convention,
+   also what `asr_baselines/metrics.py` uses for Whisper/Nemotron). **Use `corpus_wer`** for
+   any comparison against those other models; the two are not the same number and differ by
+   a few points on this data.
+4. **Select the best checkpoint properly** (optional, but strongly recommended). The default
+   recipe merges whatever the *last* epoch produced — no selection at all. Two selection
+   metrics were tried and found **not to track real streaming WER** on this recipe: `val_loss`
+   anti-correlates with WER, and NeMo/HF-style per-epoch greedy-utterance `val_wer` doesn't
+   track streaming-beam WER either (see `results/week_results_2026-06-23_2026-07-01.md` §4-5).
+   The fix that actually works: decode every candidate epoch in **real streaming mode** against
+   a selection set, pick the best, report on a disjoint held-out set:
+   ```bash
+   # Train with AVG_LAST_N>0 so Lightning keeps the last N epoch checkpoints on disk:
+   AVG_LAST_N=20 sbatch slurm/train_realtime_lora.sbatch
+   # Then sweep them in real streaming mode and report on a held-out test set:
+   RUN_DIR=<exp-dir>/<run> SELECT_FILE=val_spm1023.csv TEST_FILE=test_spm1023.csv \
+     sbatch slurm/select_best_streaming_epoch.sbatch
+   ```
+   This found a large, consistent win over merge-last on every seed tested — see
+   `results/week_results_2026-06-23_2026-07-01.md` §31.
 
 Notes:
 - Fine-tunes from the bootstrap **must** keep `spm/spm_unigram_1023.model` (enforced; sha256 is
@@ -116,6 +164,10 @@ Notes:
   use `--preprocess roi` end to end.
 - RNNT loss memory grows with sequence length × target length; patient CSVs are 24 s-segmented
   and `--max-frames 600` drops outliers. Use batch 1–2 + `--accumulate-grad-batches`.
+- This recipe has **large run-to-run WER variance when unseeded** (~24pp observed across
+  otherwise-identical runs) — always pass `--seed`/`SEED` and compare medians over ≥3 seeds,
+  never trust a single run. See `results/week_results_2026-06-23_2026-07-01.md` §10 for the
+  investigation that found this.
 
 ## Cluster environment (NYU HPC)
 
