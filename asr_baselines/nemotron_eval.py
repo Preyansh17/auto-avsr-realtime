@@ -43,15 +43,38 @@ def main():
     p.add_argument("--manifest", required=True)
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--out", default=None)
+    p.add_argument("--decoding", default=None,
+                   choices=["greedy", "greedy_batch", "beam", "maes"],
+                   help="override RNNT decoding strategy (default: whatever "
+                        "the checkpoint config carries, i.e. greedy)")
+    p.add_argument("--beam-size", type=int, default=8,
+                   help="beam width for --decoding beam/maes")
     args = p.parse_args()
 
     import nemo.collections.asr as nemo_asr
+    from omegaconf import open_dict
 
     if args.model.endswith(".nemo") and os.path.isfile(args.model):
         model = nemo_asr.models.ASRModel.restore_from(args.model)
     else:
         model = nemo_asr.models.ASRModel.from_pretrained(args.model)
     model.eval()
+
+    if args.decoding:
+        decoding_cfg = model.cfg.decoding
+        with open_dict(decoding_cfg):
+            decoding_cfg.strategy = args.decoding
+            if args.decoding in ("beam", "maes"):
+                decoding_cfg.beam.beam_size = args.beam_size
+                # return best hyp only; maes_* expansion params keep NeMo defaults
+                decoding_cfg.beam.return_best_hypothesis = True
+            if args.decoding.startswith("greedy") and "greedy" in decoding_cfg:
+                # same CUDA-graph-decoder workaround as nemotron_finetune.py
+                decoding_cfg.greedy.use_cuda_graph_decoder = False
+        model.change_decoding_strategy(decoding_cfg)
+        print(f"decoding override: strategy={args.decoding}"
+              + (f" beam_size={args.beam_size}"
+                 if args.decoding in ("beam", "maes") else ""))
 
     items = read_manifest(args.manifest)
     paths = [it["audio_filepath"] for it in items]
