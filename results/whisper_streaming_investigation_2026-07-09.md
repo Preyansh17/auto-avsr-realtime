@@ -496,6 +496,75 @@ break), pip user-site shadowing (`~/.local` py3.10 packages mask missing env
 deps under the job's `PYTHONNOUSERSITE=1`), login-node `/tmp` too small for the
 torch wheel, `~/.conda/pkgs` blowing the home quota.
 
+## 2026-07-14 (same day, later): first CarelessWhisper patient finetune
+
+Ran the finetune pipeline end-to-end for the first time: MFA-align the legal
+train/val/test splits (`slurm/carelesswhisper_mfa_align.sbatch`), LoRA-finetune
+`small_300` on the 238-clip legal train set
+(`slurm/carelesswhisper_finetune.sbatch`), convert the Lightning checkpoint to
+their eval format with a bit-exact assert
+(`asr_baselines/convert_carelesswhisper_ckpt.py`), re-eval on the 30-clip
+legal test set.
+
+**MFA alignment: zero drops.** 238/238 train, 30/30 val, 30/30 test TextGrids
+produced -- dysarthric legal speech aligned cleanly, no fallback to a
+smaller/cleaner subset needed.
+
+**Training: real overfitting on a small train set, as expected.** Val WER
+dropped fast (epoch0 62.5% -> epoch4 35.4%) then plateaued/inverted (train
+loss 3.6 -> 0.04 by epoch9 while val WER stayed flat ~35.5-36%) -- 238 clips,
+10 epochs, `no_logger` cannot be passed (see fix below) so metrics came from
+Lightning's own progress bar. Best checkpoint by `val/wer_epoch`: epoch 4.
+
+**Test-set result (30 held-out clips, greedy, 300ms chunks):**
+
+| | Zero-shot small_300 | **Finetuned small_300 (epoch 4)** | SimulStreaming large-v3 patient-FT (ref) |
+|---|---|---|---|
+| WER | 125% | **68.3%** | 14.4% |
+| TTFT p50 | 0.63s | **0.62s** | ~1.4-1.6s |
+| word-lag p50 | 0.05s | **0.05s** | ~1.35-1.5s |
+| ms/chunk | 33 | **24** | grows w/ buffer |
+
+Finetuning nearly halved the error rate (125% -> 68.3%) while the latency
+floor held exactly -- the causal-streaming mechanics don't degrade under
+finetuning, only the WER moves. Still far from the 14.4% SimulStreaming
+reference: only 238 training clips (vs the much larger pretraining data
+CarelessWhisper's own results were built on), `small` size (not large-v3, no
+large-v3 option exists upstream), and only 10 epochs on a LoRA that has
+clearly started overfitting by epoch 9. More data (legacy domain, more
+epochs with early stopping, or a larger base model) is the next lever, not
+architecture.
+
+**New bugs found running the real pipeline (all fixed, see commits
+`26ee911`..`192351e`):**
+1. `train.py` has no pyaudio stub (unlike our eval script) -- crashes on
+   import. Fixed: drop an equivalent stub into the env's site-packages from
+   the finetune sbatch.
+2. `lmdb` imported unconditionally by `datasets_classes.py` even though
+   `--lmdb` isn't passed, and isn't in upstream's own requirements.txt. Added
+   to ours.
+3. **CSV delimiter mismatch**: `AlignedTextGridDatasetLMDB` hardcodes
+   `separator='\t'` with no CLI override; our dataset builder wrote
+   comma-separated CSVs, which pandas parsed into one column and
+   KeyError'd deep inside DataLoader workers. Fixed: write tab-separated.
+4. `whisper_rt.audio.load_audio`'s ffmpeg fallback is hit unconditionally in
+   the training dataset's `__getitem__` (unlike eval, which reads via
+   soundfile first) -- `ffmpeg` wasn't on PATH since the sbatch invokes the
+   env's python binary directly rather than activating the env. Fixed:
+   installed conda-forge ffmpeg into the env, prepended its bin/ to PATH.
+5. `--no_logger` sets `Trainer(logger=False)`, but `train_model()`
+   unconditionally attaches a `LearningRateMonitor` callback that requires a
+   real logger -- `MisconfigurationException`. Fixed: don't pass
+   `--no_logger`; force their hardcoded wandb logger offline
+   (`WANDB_MODE=offline`, no account/network needed) instead.
+
+Also hit and fixed two cluster-account/scheduling issues unrelated to
+CarelessWhisper itself: MFA's `conda create -n mfa` (name-based) defaulted to
+`~/.conda/envs`, re-hitting the home-quota trap already known for pip/torch --
+fixed the same way (`-p` prefix on scratch). And compute nodes don't have
+`conda` on PATH by default even after `module load anaconda3` on the login
+node -- the sbatch now sources `conda.sh` itself.
+
 ---
 
 ## Environmental hazards to know about
