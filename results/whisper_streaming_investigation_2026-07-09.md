@@ -452,6 +452,52 @@ Checkpoints and hyp TSVs at
 
 ---
 
+## 2026-07-14: CarelessWhisper/WhisperRT — first real causal-streaming numbers
+
+The causal-LoRA route flagged throughout this file as "the only real lever below
+the ~1.4s AlignAtt floor" is now implemented and measured
+(`asr_baselines/carelesswhisper_streaming_eval.py` + sbatches; checkout at
+`/scratch/pa2753/third_party/CarelessWhisper-streaming`, env at
+`/scratch/pa2753/envs/whisper_rt`, checkpoints at
+`/scratch/pa2753/carelesswhisper/ckpts/`). Zero-shot released checkpoints
+(LibriSpeech-trained, NO patient finetune), greedy, 300ms chunks, legal split_v1
+test (30 clips), same manifest as the seed1 SimulStreaming runs:
+
+| Model | WER | TTFT p50 | word-lag p50 | ms/chunk | RTF |
+|---|---|---|---|---|---|
+| small_300 (job 13552629) | 125% | **0.63s** | **0.05s** (n=16) | 33 | 0.11 |
+| large-v2_300 (job 13553941) | 136% | **0.67s** | **0.15s** (n=49) | 72 | 0.25 |
+| (ref) SimulStreaming large-v3 patient-FT, 0.6s seg | 14.4% | ~1.4-1.6s | ~1.35-1.5s | grows w/ buffer | — |
+
+Two clean findings:
+
+1. **The latency floor is genuinely broken.** TTFT ~0.65s, word commit lag
+   0.05-0.15s, flat O(1) per-chunk compute. This is the sub-1s live-captioning
+   regime that no amount of SimulStreaming/Nemotron parameter search reached,
+   and it holds across model sizes. The architecture does what the paper
+   (arXiv 2508.12301) claims.
+2. **Zero-shot WER is unusable on dysarthric speech and model size does not
+   help** (large-v2 is *worse* than small — both pure hallucination, e.g.
+   "i did not get your point" → "I jingled a chitchat, yow, which"). The gap
+   is domain, not capacity, so the WER question is entirely deferred to the
+   patient LoRA finetune (pipeline built and committed:
+   `make_carelesswhisper_dataset.py` → MFA align → `carelesswhisper_finetune.sbatch`;
+   not yet run). Caveats for that comparison: their sizes stop at large-v2 (no
+   large-v3), and their original code is CC BY-NC 4.0 (non-commercial).
+
+Word-lag counts only words whose timed-token alignment exactly matches the
+final hyp (16/49 words across 30 clips at these garbage WERs) — treat the lag
+numbers as latency-mechanics evidence, not statistics, until a finetuned model
+produces real transcripts.
+
+Cluster traps hit and documented in the sbatch header: venv → conda (compute
+nodes resolve `/usr/bin/python3` to 3.9, login nodes 3.12 — venv symlinks
+break), pip user-site shadowing (`~/.local` py3.10 packages mask missing env
+deps under the job's `PYTHONNOUSERSITE=1`), login-node `/tmp` too small for the
+torch wheel, `~/.conda/pkgs` blowing the home quota.
+
+---
+
 ## Environmental hazards to know about
 
 - **`/home/pa2753` is at/near its inode quota** on the torch cluster — a `touch` failed even after freeing ~180 files. Not caused by this investigation specifically (pre-existing), but will block any future work that writes many small files there. Established mitigation pattern this whole project: keep envs, caches, and any file-heavy third-party code on `/scratch/pa2753/` instead of `/home/pa2753/`.
