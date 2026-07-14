@@ -1,0 +1,28 @@
+# CarelessWhisper/WhisperRT env (whisper_rt) -- its OWN venv, do not mix with
+# the Whisper (HF) or NeMo envs. Install torch first, separately:
+#   pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+# (upstream pins; tested by them with python 3.9, CUDA 12.4)
+#
+# pyaudio is deliberately OMITTED: it needs the portaudio system lib and is
+# only used for the live-microphone path. carelesswhisper_streaming_eval.py
+# stubs it out. Do not add it back for cluster use.
+#
+# Checkpoints download anonymously from the public HF repo
+# MLSpeech/CarelessWhisper-Streaming (no login needed; the eval script
+# resolves them itself because upstream hardcodes token=True).
+
+evaluate
+huggingface_hub
+jiwer
+more_itertools
+numba
+numpy
+pandas
+praatio
+pytorch_lightning==2.5.0.post0
+regex
+soundfile
+tiktoken
+tqdm
+triton
+wandb

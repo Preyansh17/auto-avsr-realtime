@@ -63,6 +63,25 @@ the default.
    the real deployment number. Streaming WER essentially matched offline WER
    once measured (see `results/week_results_2026-07-02_2026-07-06.md` §12-13).
 
+4. **CarelessWhisper/WhisperRT** (arXiv 2508.12301) — genuinely causal
+   streaming Whisper (LoRA + causal attention masks, O(1) per-chunk decode,
+   chunks down to 40ms). The route flagged in
+   `results/whisper_streaming_investigation_2026-07-09.md` as the only lever
+   below SimulStreaming's ~1.4s latency floor.
+   `carelesswhisper_streaming_eval.py` (same manifest/metrics/latency contract
+   as `whisper_streaming_eval.py`; word-lag is greedy-only — beam decode has
+   no streaming timestamps upstream) + `slurm/carelesswhisper_streaming_eval.sbatch`
+   (zero-shot released checkpoints; they download anonymously from the public
+   HF repo `MLSpeech/CarelessWhisper-Streaming`).
+   Patient finetune: `make_carelesswhisper_dataset.py` (MFA corpus + training
+   CSV; alignments via `slurm/carelesswhisper_mfa_align.sbatch`) then
+   `slurm/carelesswhisper_finetune.sbatch` (papers over upstream quirks:
+   `ds_dict_private` import, hardcoded `/mlspeech` output roots). Deps:
+   `requirements-carelesswhisper.txt` (its OWN env; pyaudio deliberately
+   omitted — the eval script stubs it). Their sizes stop at **large-v2** (no
+   v3), and their original code is **CC BY-NC 4.0 (non-commercial)** — flag
+   before any clinical/commercial deployment.
+
 ## Shared pieces
 
 - `patient_audio.py` — `(waveform, text)` from the AV CSVs; text decoded from
