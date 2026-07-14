@@ -33,13 +33,88 @@ and the device_avsr tutorial assets.
 Streaming WER on patient data, honest (train/val-selection/held-out-test split, no
 double-dipping between checkpoint selection and reporting):
 
-| Model | Legal-only | Merged |
-| --- | --- | --- |
-| **Whisper large-v3 + SpecAugment, full finetune** | **5.5%** | **2.6%** |
-| Whisper medium + SpecAugment, full finetune | 9.8% | 2.6% |
-| AV Emformer, audio-only, LoRA (streaming-selected) | 26.8% | — |
-| Nemotron streaming, full finetune | 33.3% | 31.7% |
-| AV Emformer, audio-visual, LoRA (streaming-selected) | 36.6% | — |
+| Model | Mode | Legal-only | Merged |
+| --- | --- | --- | --- |
+| **Whisper large-v3 + SpecAugment, full finetune** | offline | **5.5%** | **2.6%** |
+| Whisper large-v3 + SpecAugment, SimulStreaming (1.2s chunks) | streaming | 9.3% | 4.0% |
+
+*(single-seed numbers, from the earlier `3way_full`/`3way_merged` checkpoints. See the
+3-seed, 3-domain table below for the variance-aware version of this leaderboard, which
+uses a newer, independently-audited split and should be preferred for any claim about
+Whisper's real performance range.)*
+
+### 3-domain, 3-seed results (2026-07-13, audited split_v1)
+
+Repeated the whole Whisper large-v3+SpecAugment full-FT experiment against a new,
+independently-audited three-way split
+(`/scratch/th3482/LipVideoData/patient_legal298_legacy96_split_v1`, `split_audit.json`,
+seed=7) covering all three domains — **legal**, **legacy**, and **merged** — with 3
+training seeds each (9 finetune runs total), so both offline and streaming numbers are
+reported as a real range instead of a single lucky/unlucky draw. This is the first time
+**legacy** has ever had an honest train/val/test split in this project (76/10/10 clips);
+previously only legal and merged had one.
+
+| Domain (train/val/test) | Offline WER (seed1/2/3) | Offline mean | Streaming WER (seed1/2/3, 0.6s) | Streaming mean |
+| --- | --- | --- | --- | --- |
+| Legal (238/30/30) | 6.56% / 7.65% / 8.74% | **7.65%** | 14.75% / 16.94% / 11.48% | **14.39%** |
+| Legacy (76/10/10) | 40.00% / 17.50% / 25.00% | **27.5%** | 32.50% / 22.50% / **50.00%** | **35.0%** |
+| Merged (314/40/40) | 9.87% / 7.62% / 7.17% | **8.22%** | 17.49% / 17.49% / 16.14% | **17.04%** |
+
+Streaming latency is flat across domains regardless of WER (architecture-driven, not
+data-driven): TTFT p50 ~2.0-2.6s, word-commit lag p50 ~1.6-1.7s at 0.6s segments, matching
+the earlier legal/merged-only streaming investigation.
+
+**Legacy is genuinely high-variance, not a fluke pairing** — its 10-clip test set produces
+a 22.5pp offline range (17.5-40.0%) that *widens* to 27.5pp under streaming (22.5-50.0%),
+and the seed ranking flips entirely: seed3 is the **best** offline seed (25.0%) but becomes
+the **worst** streaming seed (50.0%). A single-seed streaming number on legacy would have
+been close to meaningless either way it landed — this is exactly the failure mode 3-seed
+evaluation exists to catch. Legal and merged stay comparatively stable across seeds (5.5pp
+and 1.4pp streaming range respectively).
+
+Streaming costs a fairly consistent +6.7 to +8.8pp across all three domains (legal +6.7pp,
+legacy +7.5pp, merged +8.8pp mean-to-mean) — in the same range as the original
+legal-only/merged streaming penalty found earlier. Full writeup, including two real bugs
+hit and fixed along the way (a token-vocabulary mismatch that looked like a queue problem,
+and a red-herring SLURM error message), in
+`results/whisper_streaming_investigation_2026-07-09.md`.
+| Whisper medium + SpecAugment, full finetune | offline | 9.8% | 2.6% |
+| AV Emformer, audio-only, LoRA (streaming-selected) | streaming | 26.8% | — |
+| Nemotron, full finetune, cache-aware streaming decode | streaming | 33.3% | 32.2% |
+| AV Emformer, audio-visual, LoRA (streaming-selected) | streaming | 36.6% | — |
+
+Streaming latency, all measured via simulated real-time (chunk k's audio only
+exists at (k+1)*chunk_duration seconds, matching a live deployment):
+
+| Model | RTF | ms/chunk | Time-to-first-text (p50) | Word-commit lag (p50) |
+| --- | --- | --- | --- | --- |
+| Whisper streaming (1.2s chunks) | 0.18-0.20 | ~200-217 | 2.6s | 1.8-1.9s |
+| Whisper streaming (0.6s chunks) | 0.30-0.31 | ~170-180 | 2.0s | 1.5-1.7s |
+| Nemotron streaming | 0.019-0.026 | 19-26 | 2.2-3.3s | unavailable* |
+
+*Nemotron word-level timestamps hit a NeMo library bug: `compute_timestamps=True`
+crashes cache-aware streaming's carried partial-hypothesis state on both greedy
+decode paths (confirmed independently, see `results/whisper_streaming_investigation_2026-07-09.md`).
+
+Tried shrinking Nemotron's chunk size (`att_context_size` presets `[70,13]`→`[70,0]`,
+1.12s down to 0.08s/chunk fully causal) hoping for a Whisper-style latency win — it
+isn't one. TTFT barely moves (2.2-3.3s → 2.2-2.3s, ~1s at best) while WER degrades
+sharply and monotonically (32-33%→44-47% at fully causal) and RTF rises 0.02→0.18.
+Nemotron's TTFT floor isn't set by its encoder chunk size; the pretrained default is
+already close to the best tradeoff available on this axis. Full sweep table in
+`results/whisper_streaming_investigation_2026-07-09.md`.
+
+Streaming Whisper (via [SimulStreaming](https://github.com/ufal/SimulStreaming)'s
+AlignAtt policy, `asr_baselines/whisper_streaming_eval.py`) costs ~1.7-1.9pp over
+offline Whisper but still beats every other streaming system's WER by ~17pp+.
+Nemotron has near-zero streaming *WER* penalty (its FastConformer encoder is
+architecturally causal/cache-aware already, unlike Whisper's bidirectional
+encoder — there's little "peek at the future" advantage for streaming to lose),
+but its native chunk size is large enough that **its actual first-word latency
+(TTFT ~2.2-3.3s) is comparable to or worse than Whisper's**, despite 10x lower
+per-chunk compute (19-26ms vs 170-217ms) — algorithmic (chunk-size) latency
+dominates over compute latency for Nemotron, the same pattern
+`scripts/benchmark_latency.py` calls out for the AV Emformer.
 
 Video does not currently help: audio-only configs beat their audio-visual counterparts
 across every architecture tested. See `results/week_results_2026-06-23_2026-07-01.md`
@@ -48,8 +123,9 @@ including two real methodology bugs found and fixed along the way — a WER metr
 mismatch between architectures (§27) and a checkpoint-selection bias in Whisper's
 default recipe (§28-30) that briefly inflated its headline number before an honest
 three-way split corrected it. `results/whisper_streaming_investigation_2026-07-09.md`
-documents an unresolved attempt at real-time streaming Whisper (blocked, not just
-untried — see that file for the current state and options).
+documents the streaming-Whisper effort: initially blocked on garbage output, root-caused
+to a silently fp16-corrupted checkpoint conversion, fixed, and completed with the
+streaming numbers above.
 
 ## Two architectures
 
