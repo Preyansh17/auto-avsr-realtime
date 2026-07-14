@@ -565,6 +565,45 @@ fixed the same way (`-p` prefix on scratch). And compute nodes don't have
 `conda` on PATH by default even after `module load anaconda3` on the login
 node -- the sbatch now sources `conda.sh` itself.
 
+## 2026-07-14 (same day, later still): merged domain -- does more data help?
+
+Repeated the finetune on the merged split (314/40/40, legal+legacy union,
+314 train clips vs legal-alone's 238) to test whether the WER gap is
+data-limited. MFA alignment: zero drops again (314/314, 40/40, 40/40).
+
+**Test-set result (40 held-out clips, greedy, 300ms chunks):**
+
+| | Legal-only finetune (238 train) | **Merged finetune (314 train)** |
+|---|---|---|
+| Val WER (best epoch) | 35.4% (epoch 4) | **30.5%** (epoch 8) |
+| Test WER | 68.3% | **56.95%** |
+| TTFT p50 | 0.62s | 0.63s |
+| word-lag p50 | 0.05s | 0.06s |
+
+More data clearly helps -- test WER dropped another ~11pp with ~32% more
+training clips, and best-epoch val WER improved too (35.4% -> 30.5%),
+without the earlier plateau/overfit signature showing up as badly by epoch 8
+(still 10 epochs, LoRA rank 32, same recipe otherwise). Latency floor is
+completely unaffected by domain or checkpoint, as expected -- it's a
+property of the chunk size and architecture, not the weights.
+
+**Caveat, flagged per [[patient-avsr-wer-variance]]**: single unseeded runs
+on ~230-320 train / ~30-40 test clips can swing double-digit points from
+sampling alone (the AV Emformer's own LoRA runs varied ~24pp across seeds on
+comparable data sizes). The legal-only -> merged improvement (68.3% ->
+56.95%) is consistent with "more data helps" but is one run each, not a
+seeded comparison -- treat the direction as a real signal, the exact
+magnitude as noisy until multiple seeds are run.
+
+Hit one more infra bug getting here: submitting 3 concurrent MFA `--clean`
+align jobs (train/val/test) raced on the *acoustic model's* extraction
+directory (not the corpus workspace -- `--temporary_directory` doesn't cover
+it) and killed 2 of 3 jobs with `OSError: Stale file handle`. Real fix:
+`MFA_ROOT_DIR` env var (read at process start, unlike the CLI flag) pointed
+at a persistent scratch dir with models pre-downloaded once; don't run
+`--clean` concurrently against a shared root regardless (see commits
+`5a59748`, `e5eebd4`).
+
 ---
 
 ## Environmental hazards to know about
