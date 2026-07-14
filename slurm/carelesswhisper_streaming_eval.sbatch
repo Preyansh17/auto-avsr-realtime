@@ -55,6 +55,11 @@ EXTRA_ARGS="${EXTRA_ARGS:-}"            # e.g. "--rcs --extra-initial-blocks 2" 
 
 cd "${PROJECT_ROOT}"
 export PYTHONNOUSERSITE=1
+# whisper_rt.audio.load_audio's ffmpeg fallback needs it on PATH; the eval
+# script's primary path (soundfile) avoids this for standard 16kHz wavs, but
+# keep PATH correct for the fallback and for --rcs/other codepaths that hit
+# load_audio directly. conda-forge ffmpeg installed into CW_ENV.
+export PATH="${CW_ENV}/bin:${PATH}"
 
 echo "Starting CarelessWhisper streaming eval at $(date) on $(hostname):"
 echo "  MODEL=${MODEL} CHUNK_MS=${CHUNK_MS} BEAMS=${BEAMS} MANIFEST=${MANIFEST}"

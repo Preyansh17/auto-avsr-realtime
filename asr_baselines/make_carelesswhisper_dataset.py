@@ -83,7 +83,11 @@ def cmd_csv(args, examples):
             dropped.append(name)
     os.makedirs(os.path.dirname(os.path.abspath(args.out_csv)), exist_ok=True)
     with open(args.out_csv, "w", encoding="utf-8", newline="") as f:
-        w = csv.writer(f)  # quoted commas: their loader is pandas.read_csv
+        # TAB-separated: their dataset classes hardcode separator='\t' with
+        # no CLI override (checked training_code/datasets_classes.py), a
+        # comma-separated CSV parses into one column and KeyErrors on
+        # item["wav_path"] deep inside the DataLoader workers.
+        w = csv.writer(f, delimiter="\t")
         w.writerow(["wav_path", "tg_path", "raw_text"])
         w.writerows(rows)
     print(f"csv: {len(rows)} rows -> {args.out_csv}")

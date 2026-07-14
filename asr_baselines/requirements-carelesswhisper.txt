@@ -3,6 +3,13 @@
 #   pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 # (upstream pins; tested by them with python 3.9, CUDA 12.4)
 #
+# ffmpeg is NOT a pip package -- install it into this env separately:
+#   conda install -y -p /scratch/$USER/envs/whisper_rt -c conda-forge ffmpeg
+# whisper_rt.audio.load_audio shells out to it unconditionally (dataset
+# __getitem__ during training, and load_audio's fallback path during eval);
+# the sbatches prepend this env's bin/ to PATH since they invoke the python
+# binary directly rather than activating the env.
+#
 # pyaudio is deliberately OMITTED: it needs the portaudio system lib and is
 # only used for the live-microphone path. carelesswhisper_streaming_eval.py
 # stubs it out at import time; carelesswhisper_finetune.sbatch drops an
@@ -18,6 +25,8 @@
 evaluate
 huggingface_hub
 jiwer
+lmdb   # not in upstream's own requirements.txt but imported unconditionally
+       # by training_code/datasets_classes.py even when --lmdb isn't passed
 more_itertools
 numba
 numpy

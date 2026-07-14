@@ -90,6 +90,10 @@ EOF
 cd "${CARELESS_DIR}"
 export PYTHONNOUSERSITE=1
 export PYTHONPATH="${CARELESS_DIR}:${PYTHONPATH:-}"
+# whisper_rt.audio.load_audio shells out to `ffmpeg` on PATH; we invoke
+# ${CW_PY} directly rather than activating the env, so PATH needs it too
+# (conda-forge ffmpeg installed into CW_ENV -- see requirements doc).
+export PATH="${CW_ENV}/bin:${PATH}"
 
 echo "Starting CarelessWhisper finetune at $(date) on $(hostname):"
 echo "  SIZE=${SIZE} GRAN=${GRAN} RANK=${RANK} BATCH_SIZE=${BATCH_SIZE} EPOCHS=${EPOCHS} LR=${LR}"
