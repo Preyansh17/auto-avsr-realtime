@@ -13,15 +13,20 @@
 # (no patient finetune yet) -- establishes the latency floor this architecture
 # actually delivers, and the WER gap a finetune has to close.
 #
-# One-time setup (login node):
+# One-time setup (login node). MUST be a conda prefix env, NOT `python -m
+# venv`: venv symlinks bin/python to /usr/bin/python3, which is 3.12 on login
+# nodes but 3.9 on compute nodes -- the job then runs the wrong interpreter
+# with an empty site-packages (found the hard way, job 13551431).
 #   git clone https://github.com/tomer9080/CarelessWhisper-streaming \
 #     /scratch/$USER/third_party/CarelessWhisper-streaming
-#   python -m venv /scratch/$USER/envs/whisper_rt
+#   module load anaconda3/2025.06
+#   conda create -y -p /scratch/$USER/envs/whisper_rt python=3.10
 #   /scratch/$USER/envs/whisper_rt/bin/pip install \
 #     torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 #   /scratch/$USER/envs/whisper_rt/bin/pip install -r \
 #     $PROJECT_ROOT/asr_baselines/requirements-carelesswhisper.txt
-# (checkpoints download anonymously -- the HF repo is public, no login needed)
+# (use TMPDIR=/scratch/$USER/tmp -- login-node /tmp is a 2GB tmpfs, torch
+# wheel won't fit; checkpoints download anonymously, HF repo is public)
 #
 #   MANIFEST=/scratch/pa2753/experiments/whisper_asr/whisper_largev3_specaug_splitv1_legal_seed1/test_hyps.tsv \
 #   MODEL=small CHUNK_MS=300 sbatch slurm/carelesswhisper_streaming_eval.sbatch

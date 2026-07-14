@@ -234,7 +234,18 @@ def main():
         # Label CSV paths point at video-only lip-crop mp4s; audio is the
         # sibling 16kHz .wav (same convention as patient_audio.load_waveform).
         wav_path = os.path.splitext(it["path"])[0] + ".wav"
-        audio = load_audio(wav_path if os.path.isfile(wav_path) else it["path"])
+        src = wav_path if os.path.isfile(wav_path) else it["path"]
+        # Patient wavs are already 16kHz mono; read directly (whisper's
+        # load_audio shells out to ffmpeg, absent on the cluster nodes).
+        try:
+            import soundfile as sf
+            audio, sr = sf.read(src, dtype="float32")
+            if audio.ndim > 1:
+                audio = audio.mean(axis=1)
+            if sr != SAMPLE_RATE:
+                raise ValueError(f"{src}: {sr}Hz, need ffmpeg resample")
+        except Exception:
+            audio = load_audio(src)
         dur = len(audio) / SAMPLE_RATE
         total_audio += dur
 
