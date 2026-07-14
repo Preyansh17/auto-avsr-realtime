@@ -12,6 +12,13 @@ Green recipe applied here:
   * SpecAugment with cut frequency masking, blown-up time masking (NeMo's native
     spec_augment block, set from CLI -> mirrors specaug_green.yaml).
 
+Also supports --lora: freezes the whole model and trains only a small
+bottleneck adapter inserted into each encoder layer (NeMo's built-in
+LinearAdapterConfig -- a Houlsby-style residual adapter, the closest
+equivalent NeMo ships for RNNT-BPE conformer encoders; not the same
+mechanism as the AV Emformer's true low-rank LoRA in online_avsr/lora.py,
+but same intent: frozen backbone, small trainable add-on).
+
 NeMo's API shifts between releases; the version-sensitive spots are marked. Pin
 via requirements-nemotron.txt and run in its OWN env (NeMo pins a torch that
 clashes with the AV torch-2.6 env).
@@ -47,6 +54,20 @@ def parse_args():
                    help="train encoder layers [0, N); -1 = train all")
     p.add_argument("--freeze-decoder", action="store_true", default=True)
     p.add_argument("--train-decoder", dest="freeze_decoder", action="store_false")
+    # LoRA (NeMo's bottleneck adapter on the FastConformer encoder -- Houlsby-
+    # style residual adapter, not a literal low-rank weight decomposition like
+    # the AV Emformer's own online_avsr/lora.py; NeMo doesn't expose true LoRA
+    # for RNNT-BPE conformer encoders, this is the closest built-in equivalent
+    # and serves the same purpose: frozen backbone, small trainable add-on).
+    # Mutually exclusive with --unfreeze-encoder-layers/--train-decoder; when
+    # set, those are ignored (encoder+decoder+joint all frozen, only the
+    # adapter is trainable).
+    p.add_argument("--lora", action="store_true",
+                   help="freeze the whole model, train only a bottleneck adapter "
+                        "inserted into each FastConformer encoder layer")
+    p.add_argument("--lora-dim", type=int, default=32,
+                   help="adapter bottleneck dimension")
+    p.add_argument("--lora-dropout", type=float, default=0.0)
     # Cache-aware streaming context (left,right) in frames; keep model default if unset.
     p.add_argument("--att-context-size", type=int, nargs=2, default=None,
                    help="e.g. 70 13 ; default keeps the pretrained streaming context")
@@ -144,6 +165,39 @@ def apply_freeze(model, args):
     total = sum(p.numel() for p in model.parameters())
     print(f"Freeze: training encoder layers {list(train_idx)} "
           f"(decoder frozen={args.freeze_decoder}); "
+          f"trainable {trainable/1e6:.2f}M / {total/1e6:.2f}M ({trainable/total:.1%})")
+
+
+def apply_lora(model, args):
+    """Freeze everything, then attach a bottleneck adapter (NeMo's
+    LinearAdapterConfig, Houlsby-style: down-proj -> swish -> up-proj,
+    zero-init'd output so it starts as a no-op residual) to every FastConformer
+    encoder layer. Only the adapter params end up trainable.
+
+    The base EncDecRNNTBPEModel's encoder (plain ConformerEncoder) doesn't
+    implement the adapter mixin -- replace_adapter_compatible_modules() swaps
+    it in-place for ConformerEncoderAdapter (same weights, adapter-capable
+    subclass) before add_adapter() can be called. NeMo's own restore_from
+    handles reconstructing this from a saved .nemo's cfg.adapters section
+    (ASRAdapterModelMixin.setup_adapters(), called at model construction time),
+    so nemotron_eval.py needs no special-casing to load a LoRA checkpoint.
+    """
+    from nemo.collections.common.parts.adapter_modules import LinearAdapterConfig
+
+    for prm in model.parameters():
+        prm.requires_grad = False
+    model.replace_adapter_compatible_modules()
+    cfg = LinearAdapterConfig(
+        in_features=model.cfg.encoder.d_model,
+        dim=args.lora_dim,
+        dropout=args.lora_dropout,
+    )
+    model.add_adapter(name="lora", cfg=cfg)
+    model.unfreeze_enabled_adapters()
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total = sum(p.numel() for p in model.parameters())
+    print(f"LoRA: bottleneck adapter dim={args.lora_dim} on all encoder layers "
+          f"(decoder+joint frozen); "
           f"trainable {trainable/1e6:.2f}M / {total/1e6:.2f}M ({trainable/total:.1%})")
 
 
@@ -245,7 +299,10 @@ def main():
         print(f"att_context_size set to {args.att_context_size}")
 
     set_spec_augment(model, args)
-    apply_freeze(model, args)
+    if args.lora:
+        apply_lora(model, args)
+    else:
+        apply_freeze(model, args)
 
     # Optimizer / schedule
     #

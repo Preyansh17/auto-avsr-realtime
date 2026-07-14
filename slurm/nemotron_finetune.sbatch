@@ -51,6 +51,9 @@ export GRAD_ACCUM="${GRAD_ACCUM:-2}"
 export PRECISION="${PRECISION:-bf16-mixed}"
 export UNFREEZE_ENCODER_LAYERS="${UNFREEZE_ENCODER_LAYERS:-5}"
 export TRAIN_DECODER="${TRAIN_DECODER:-0}"   # 1 -> also unfreeze decoder (with -1 encoder = full finetune)
+export LORA="${LORA:-0}"          # 1 -> freeze everything, train only a bottleneck adapter (overrides UNFREEZE_ENCODER_LAYERS/TRAIN_DECODER)
+export LORA_DIM="${LORA_DIM:-32}"
+export LORA_DROPOUT="${LORA_DROPOUT:-0.0}"
 export SPECAUG="${SPECAUG:-1}"
 export SEED="${SEED:-}"           # set an int for reproducible runs
 export NUM_WORKERS="${NUM_WORKERS:-2}"
@@ -66,11 +69,13 @@ TRAIN_DECODER_FLAG=""
 [[ "${TRAIN_DECODER}" == "1" ]] && TRAIN_DECODER_FLAG="--train-decoder"
 SEED_FLAG=""
 [[ -n "${SEED}" ]] && SEED_FLAG="--seed ${SEED}"
+LORA_FLAG=""
+[[ "${LORA}" == "1" ]] && LORA_FLAG="--lora --lora-dim ${LORA_DIM} --lora-dropout ${LORA_DROPOUT}"
 
 OUT="${EXP_DIR}/${EXP_NAME}"
 
 echo "Starting Nemotron finetune at $(date) on $(hostname)"
-echo "NEMO_ENV=${NEMO_ENV} MODEL=${NEMO_MODEL} EXP_NAME=${EXP_NAME} SPECAUG=${SPECAUG} UNFREEZE=${UNFREEZE_ENCODER_LAYERS} TRAIN_DECODER=${TRAIN_DECODER} SEED=${SEED}"
+echo "NEMO_ENV=${NEMO_ENV} MODEL=${NEMO_MODEL} EXP_NAME=${EXP_NAME} SPECAUG=${SPECAUG} UNFREEZE=${UNFREEZE_ENCODER_LAYERS} TRAIN_DECODER=${TRAIN_DECODER} LORA=${LORA} LORA_DIM=${LORA_DIM} SEED=${SEED}"
 [[ "${DRY_RUN:-0}" == "1" ]] && { echo "DRY_RUN=1, not launching."; exit 0; }
 
 cd "${PROJECT_ROOT}"
@@ -122,7 +127,7 @@ fi
   --precision "${PRECISION}" \
   --unfreeze-encoder-layers "${UNFREEZE_ENCODER_LAYERS}" \
   --num-workers "${NUM_WORKERS}" \
-  ${SPECAUG_FLAG} ${TRAIN_DECODER_FLAG} ${SEED_FLAG}
+  ${SPECAUG_FLAG} ${TRAIN_DECODER_FLAG} ${SEED_FLAG} ${LORA_FLAG}
 
 # Report on the checkpoint the SELECTION set (VAL_FILE) picked as best,
 # evaluated on the disjoint TEST_FILE -- falls back to the last-epoch
