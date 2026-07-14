@@ -21,6 +21,10 @@
 #     /scratch/$USER/third_party/CarelessWhisper-streaming
 #   module load anaconda3/2025.06
 #   conda create -y -p /scratch/$USER/envs/whisper_rt python=3.10
+#   export PYTHONNOUSERSITE=1   # else pip sees ~/.local py3.10 packages as
+#                               # "already satisfied" and skips installing
+#                               # them into the env, which this job (with
+#                               # PYTHONNOUSERSITE=1) then can't see
 #   /scratch/$USER/envs/whisper_rt/bin/pip install \
 #     torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 #   /scratch/$USER/envs/whisper_rt/bin/pip install -r \
