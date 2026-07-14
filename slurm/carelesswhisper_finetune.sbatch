@@ -18,8 +18,11 @@
 #     we generate ${CARELESS_DIR}/ds_dict_private.py from env vars each run.
 #   - logs_root/ckpt_root are hardcoded to their /mlspeech machine; we sed
 #     them to ${CW_RUNS} (idempotent).
-#   - wandb logger is on by default; we pass --no_logger (metrics still land
-#     in the slurm log via lightning's progress output).
+#   - --no_logger sets logger=False, but their LearningRateMonitor callback
+#     is hardcoded on regardless and raises MisconfigurationException with
+#     no logger attached -- so we do NOT pass --no_logger, and force their
+#     wandb logger offline (WANDB_MODE=offline: no account, no network,
+#     writes local files) instead of disabling it.
 #
 # ALL recipe knobs are set explicitly below -- do not trust upstream CLI
 # defaults to match their README examples (they don't: e.g. rank defaults to
@@ -94,6 +97,12 @@ export PYTHONPATH="${CARELESS_DIR}:${PYTHONPATH:-}"
 # ${CW_PY} directly rather than activating the env, so PATH needs it too
 # (conda-forge ffmpeg installed into CW_ENV -- see requirements doc).
 export PATH="${CW_ENV}/bin:${PATH}"
+# train_model() unconditionally attaches a LearningRateMonitor callback,
+# which raises MisconfigurationException if the Trainer has no logger
+# (logger=False whenever --no_logger is passed) -- so we do NOT pass
+# --no_logger, and instead force their hardcoded WandbLogger offline (no
+# account, no network, writes local files under ${CW_RUNS}/logs/wandb/).
+export WANDB_MODE=offline
 
 echo "Starting CarelessWhisper finetune at $(date) on $(hostname):"
 echo "  SIZE=${SIZE} GRAN=${GRAN} RANK=${RANK} BATCH_SIZE=${BATCH_SIZE} EPOCHS=${EPOCHS} LR=${LR}"
@@ -103,7 +112,6 @@ echo "  TRAIN_CSV=${TRAIN_CSV}"
   --lora \
   --streaming_train \
   --simulate_stream \
-  --no_logger \
   --dataset "${DATASET_NAME}" \
   --name "${RUN_NAME}" \
   --size "${SIZE}" \
