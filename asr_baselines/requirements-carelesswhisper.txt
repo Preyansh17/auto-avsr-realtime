@@ -5,7 +5,11 @@
 #
 # pyaudio is deliberately OMITTED: it needs the portaudio system lib and is
 # only used for the live-microphone path. carelesswhisper_streaming_eval.py
-# stubs it out. Do not add it back for cluster use.
+# stubs it out at import time; carelesswhisper_finetune.sbatch drops an
+# equivalent stub module into this env's site-packages (whisper_rt.audio
+# imports pyaudio unconditionally at module load, and training_code/train.py
+# has no stub of its own -- hit this the hard way, job 13673835). Do not add
+# real pyaudio back for cluster use.
 #
 # Checkpoints download anonymously from the public HF repo
 # MLSpeech/CarelessWhisper-Streaming (no login needed; the eval script
