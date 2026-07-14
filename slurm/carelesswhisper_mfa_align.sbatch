@@ -13,10 +13,13 @@
 # One-time setup (MFA is conda-only; separate env, nothing else goes in it).
 # MUST use -p on scratch, not -n (name-based envs default to
 # ~/.conda/envs, which blows the home quota -- see whisper_rt's venv/conda
-# writeup for the same class of trap):
+# writeup for the same class of trap). Model downloads MUST also go to
+# scratch via MFA_ROOT_DIR (default is ~/Documents/MFA -- home, and shared
+# across every invocation regardless of corpus):
 #   module load anaconda3/2025.06
 #   export TMPDIR=/scratch/$USER/tmp CONDA_PKGS_DIRS=/scratch/$USER/tmp/conda-pkgs
 #   conda create -y -p /scratch/$USER/envs/mfa -c conda-forge montreal-forced-aligner
+#   export MFA_ROOT_DIR=/scratch/$USER/mfa_root
 #   conda run -p /scratch/$USER/envs/mfa mfa model download acoustic english_us_arpa
 #   conda run -p /scratch/$USER/envs/mfa mfa model download dictionary english_us_arpa
 #
@@ -27,6 +30,14 @@
 # Dysarthric speech is exactly what MFA's models were NOT built for -- expect
 # some clips to fail alignment. The `csv` step reports what got dropped;
 # review that list, don't just proceed.
+#
+# DO NOT submit multiple align jobs concurrently against the same
+# MFA_ROOT_DIR: `--clean` re-extracts the acoustic model archive on every
+# run, and concurrent extraction into the same shared directory races
+# (OSError: Stale file handle, killed 2 of 3 jobs when the merged split's
+# train/val/test were submitted at once). Submit sequentially, or give each
+# job a private MFA_ROOT_DIR (re-downloads models each time -- slower, but
+# safe to parallelize).
 
 set -euo pipefail
 
@@ -34,17 +45,16 @@ set -euo pipefail
 [[ -n "${ALIGNED:-}" ]] || { echo "[FATAL] set ALIGNED=<textgrid output dir>" >&2; exit 4; }
 export MFA_ENV="${MFA_ENV:-/scratch/${USER}/envs/mfa}"
 export TMPDIR="${TMPDIR:-/scratch/${USER}/tmp}"
-mkdir -p "/scratch/${USER}/auto-avsr/output" "${TMPDIR}"
+# Model storage root (env var, read at process start -- unlike
+# --temporary_directory, which is a CLI flag applied too late to affect the
+# eager model-archive extraction that happens during argument validation).
+# Default here is a PERSISTENT scratch dir shared across jobs so models are
+# downloaded once, not per-job -- do not point this at a per-job dir unless
+# you also want to redownload the model archive every run.
+export MFA_ROOT_DIR="${MFA_ROOT_DIR:-/scratch/${USER}/mfa_root}"
+mkdir -p "/scratch/${USER}/auto-avsr/output" "${TMPDIR}" "${MFA_ROOT_DIR}"
 
-# MFA's default --temporary_directory is ~/Documents/MFA -- SHARED across
-# every invocation regardless of corpus. Concurrent `--clean` runs race on
-# it (OSError: Stale file handle, killed 2 of 3 concurrent merged-split
-# align jobs) and it's on home (quota risk, same class as the pip/conda
-# traps elsewhere in this pipeline). Give every job its own scratch dir.
-MFA_TEMP="${TMPDIR}/mfa_$(basename "${CORPUS}")_${SLURM_JOB_ID:-$$}"
-mkdir -p "${MFA_TEMP}"
-
-echo "Starting MFA align at $(date) on $(hostname): CORPUS=${CORPUS} -> ALIGNED=${ALIGNED}"
+echo "Starting MFA align at $(date) on $(hostname): CORPUS=${CORPUS} -> ALIGNED=${ALIGNED} (MFA_ROOT_DIR=${MFA_ROOT_DIR})"
 
 # compute nodes don't have `conda` on PATH by default -- module load it here,
 # same trap as the CarelessWhisper eval env (login vs compute node PATH
@@ -52,9 +62,6 @@ echo "Starting MFA align at $(date) on $(hostname): CORPUS=${CORPUS} -> ALIGNED=
 source /share/apps/anaconda3/2025.06/etc/profile.d/conda.sh
 
 conda run -p "${MFA_ENV}" mfa align --clean -j "${SLURM_CPUS_PER_TASK}" \
-  --temporary_directory "${MFA_TEMP}" \
   "${CORPUS}" english_us_arpa english_us_arpa "${ALIGNED}"
-
-rm -rf "${MFA_TEMP}"
 
 echo "Finished at $(date): $(ls "${ALIGNED}" | grep -c TextGrid || true) TextGrids"
