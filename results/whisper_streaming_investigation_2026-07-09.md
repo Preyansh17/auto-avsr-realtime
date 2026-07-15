@@ -644,6 +644,69 @@ SIGKILL'd (exit 137, no error text -- looks like a hang unless you check the
 real exit code past a pipe). Fixed by running the converter as a small CPU
 sbatch job instead of interactively (see commit `0aa4e28`).
 
+## 2026-07-14 (same day, later still again x2): seed variance + full finetune
+
+Two follow-ups on the merged `small_300` result: (1) run 3 more seeds with
+`--early_stop` (their EarlyStopping callback, patience=2 on val/wer) and a
+40-epoch ceiling, to get an honest sense of variance instead of one lucky/
+unlucky draw; (2) try **full finetuning** instead of LoRA -- their codebase
+has no CLI flag for this (`LoRAStreamedWhisper.__init__` unconditionally
+freezes every non-LoRA param), so this required patching
+`training_code/whisper_module.py` at runtime via an env-var-gated
+conditional (`carelesswhisper_finetune.sbatch`'s `FULL_FINETUNE=1`, idempotent
+patch, see commit for details). Verified `configure_optimizers` doesn't
+hardcode LoRA-only param filtering (it groups by `requires_grad`, generic)
+before trusting this.
+
+**LoRA multi-seed spread (small_300, merged, early-stop, up to 40 epochs):**
+
+| Seed | Val WER (best epoch) | Test WER |
+|---|---|---|
+| 3407 (original run, no early-stop, 10 fixed epochs) | 30.5% | 56.95% |
+| 1 | 32.2% | 63.68% |
+| 2 | 30.6% | 66.82% |
+| 3 | 29.6% | 59.19% |
+
+Range 56.95-66.82% (~10pp spread across 4 seed values), mean ~61.7%. Real
+variance, confirming [[patient-avsr-wer-variance]]'s warning applies here
+too -- though notably tighter than the ~24pp swings seen on the AV Emformer,
+and the original 56.95% number was on the lucky end, not representative of
+the mean.
+
+**Full finetune result (small_300, merged, seed 3407, early-stop): test WER
+40.81%.** Beats every single LoRA seed above by 16-26pp -- not within the
+LoRA seed-variance band, a categorically different result. Latency floor
+unaffected as always (TTFT p50 0.64s, word-lag p50 0.08s). Training itself
+converged much faster than LoRA (loss dropped to ~0.01-0.05 within 2 epochs,
+early-stopped at epoch 4 total, ~4.5 min wall-clock) -- `small`'s full
+240M-param capacity fits patient speech far better than LoRA's 7.1M
+trainable params allow, without the catastrophic overfitting that hurt
+large-v2 (whose base is 6.5x bigger, on the same ~300-clip budget).
+
+**Practical implication**: full finetuning `small`, not model size or LoRA
+rank, is now the best-known lever for closing the gap to the 14.4%
+SimulStreaming reference. 40.81% is still short of that, but it's the first
+result in this whole investigation that meaningfully moves the number rather
+than plateauing in the high-50s/60s. Full-FT `large-v2` was explicitly NOT
+tried (see [[carelesswhisper-status]] reasoning: large-v2's LoRA result
+already showed the bigger base overfitting on this data size, and full FT
+gives it even more capacity to do that with, not less).
+
+New infra note: converting a full-finetune checkpoint (not just large-v2)
+also OOM'd the login node -- it's the optimizer state size that matters, not
+raw base-model size (`small` full-FT has 240M trainable vs large-v2 LoRA's
+7.1M, and both needed the CPU-sbatch conversion route). Also fixed a latent
+concurrency bug in the finetune sbatch before running seeds in parallel:
+the original SEED-patch approach sed-substituted the literal `SEED = 3407`
+line in the shared checkout, which would race if multiple seed jobs started
+near-simultaneously (job A patches to SEED=1, job B's sed pattern no longer
+matches the now-changed line and silently no-ops). Fixed by patching the
+line ONCE to read from an env var at runtime instead of literal-substituting
+per run -- safe under concurrency since the file is written only once ever.
+Also had to make `RUN_NAME` include the seed by default, since the upstream
+checkpoint dirpath doesn't include seed and would otherwise let concurrent
+seed runs clobber each other's checkpoint files.
+
 ---
 
 ## Environmental hazards to know about
