@@ -707,6 +707,57 @@ Also had to make `RUN_NAME` include the seed by default, since the upstream
 checkpoint dirpath doesn't include seed and would otherwise let concurrent
 seed runs clobber each other's checkpoint files.
 
+## 2026-07-14 (same day, later still again x3): full-FT large-v2 -- the earlier verdict was wrong
+
+Full-FT small beat every LoRA config, so the obvious next question: does
+full-FT fix large-v2 too? Earlier in this file, large-v2's LoRA failure
+(69.9% val WER even with their own recipe) was read as "genuinely
+data-limited, not a hyperparameter artifact," and the recommendation was
+explicitly **not** to try full-FT there ("more capacity to overfit 314
+clips, not less"). That reasoning was wrong.
+
+**Full-FT large-v2 (merged, batch=4 for memory headroom, early-stop):
+test WER 39.91%** -- essentially tied with (marginally better than) full-FT
+small's 40.81%, and 61pp better than large-v2's own LoRA result (101.35%).
+Val WER: 46.8% -> 35.6% -> **26.9%** (epoch 2, best) -> 33.1% -> 33.1%
+(early-stopped). No OOM at batch=4 despite unfreezing all 1.6B params
+(AdamW state alone is ~2x params in extra memory).
+
+**The real lesson, corrected**: large-v2's LoRA failure wasn't data
+scarcity — it was LoRA's own trainable-parameter budget. LoRA gives a
+model exactly as many knobs as its rank allows (31M for large-v2's default
+rank=32, or ~8M at their own rank=4 recipe) regardless of how many total
+parameters the base model has. A bigger base model needs proportionally
+more trainable capacity to adapt via LoRA than a smaller one does on the
+same tiny dataset -- rank=32 that's "enough" LoRA capacity for `small`
+(240M base) is nowhere near enough for large-v2 (1.6B base, ~6.5x bigger).
+Full finetuning sidesteps this entirely by giving every model exactly as
+much capacity as it already has. Model size was never the actual variable
+under test in the earlier LoRA comparison -- LoRA rank relative to base
+size was.
+
+**Updated final ranking (merged domain, all test WER on the same 40-clip
+held-out set):**
+
+| Config | Test WER | TTFT p50 | word-lag p50 |
+|---|---|---|---|
+| Zero-shot (either size) | 125-136% | ~0.65s | ~0.10s |
+| LoRA, small (4 seeds) | 56.95-66.82% | ~0.63s | ~0.06s |
+| LoRA, large-v2 (either recipe) | 101.35% | ~0.67s | ~0.15-0.20s |
+| Full-FT, small (seed 3407) | 40.81% | 0.64s | 0.08s |
+| **Full-FT, large-v2 (seed 3407)** | **39.91%** | 0.66s | 0.11s |
+| SimulStreaming reference | 14.4% | ~1.5s | ~1.4s |
+
+Full-FT closes roughly two-thirds of the gap between zero-shot garbage and
+the SimulStreaming reference, on either base size. Latency stays well under
+1s either way -- large-v2 full-FT's word-lag (0.11s) is still ~12x lower
+than SimulStreaming's (1.4s), so the size choice going forward is about
+compute budget and further headroom, not latency or (apparently) achievable
+WER -- both sizes seem to land in the same ballpark once given real
+capacity to adapt. Only one seed tried per full-FT config so far; per
+[[patient-avsr-wer-variance]], treat the small-vs-large-v2 tie as
+directional, not confirmed, until seeded.
+
 ---
 
 ## Environmental hazards to know about
