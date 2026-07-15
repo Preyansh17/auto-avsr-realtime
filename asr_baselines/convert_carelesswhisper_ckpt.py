@@ -17,6 +17,13 @@ against the original Lightning state_dict -- max diff must be exactly 0.0.
 Requires the CarelessWhisper-streaming checkout on PYTHONPATH (its own
 Config/LoRAStreamedWhisper classes are pickled into the .ckpt).
 
+For large-v2 (or any size beyond `small`), DO NOT run this on the login
+node -- the Lightning .ckpt bundles full optimizer state alongside the
+weights, and torch.load'ing it in-memory OOM-killed the login node
+(SIGKILL, exit 137, no error message -- looks like a silent hang unless you
+check the real exit code). Submit as a small CPU sbatch job instead
+(--mem=32GB was enough for large-v2).
+
   python -m asr_baselines.convert_carelesswhisper_ckpt \
     --ckpt .../checkpoint/checkpoint-epoch=0004.ckpt \
     --careless-dir /scratch/$USER/third_party/CarelessWhisper-streaming \
