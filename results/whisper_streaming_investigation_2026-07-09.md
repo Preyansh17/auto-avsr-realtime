@@ -604,6 +604,46 @@ at a persistent scratch dir with models pre-downloaded once; don't run
 `--clean` concurrently against a shared root regardless (see commits
 `5a59748`, `e5eebd4`).
 
+## 2026-07-14 (same day, later still again): large-v2 -- bigger is NOT better here
+
+Tried the obvious next lever -- their biggest available size (`large-v2`,
+1.6B params, no v3 exists upstream) on the merged split, same recipe as
+`small` (LR 1e-5, LoRA rank 32, batch 16, 10 epochs, 300ms chunks).
+
+**Result: large-v2 is worse than small on every axis, not better.**
+
+| | small_300, merged (314 train) | **large-v2_300, merged (314 train)** |
+|---|---|---|
+| Val WER (best epoch) | 30.5% (epoch 8) | **71.9%** (epoch 3) |
+| Test WER | 56.95% | **101.35%** (worse than random deletion) |
+| TTFT p50 | 0.63s | 0.68s |
+| word-lag p50 | 0.06s | 0.20s |
+| ms/chunk | 22 | 69 |
+
+Train loss dropped fine (down to ~0.05-0.5 by epoch 9, same shape as the
+small runs) while val WER got *worse* after epoch 3 and never recovered --
+this isn't underfitting, it's the LoRA/optimizer recipe not transferring to
+the bigger base. Notably, their own README uses a **different** large-v2
+recipe (`batch_size=4, rank=4`) from the small/base recipe (`batch_size=16,
+rank=32`) we've been using throughout -- we ran large-v2 with the small
+recipe's hyperparameters, and this result suggests that substitution isn't
+free. Latency also got measurably worse (word-lag p50 3x higher, TTFT up),
+consistent with more per-chunk compute on the same chunk size.
+
+**Conclusion: don't retry `large-v2` with the small-recipe hyperparameters
+expecting it to help.** If model-size is revisited, use their own large-v2
+recipe (lower rank, smaller batch, possibly the `--random_masking` RCS
+variant they used for it) rather than reusing the small recipe unchanged.
+For now, the best-known configuration remains **small_300, merged-domain
+finetune, 56.95% test WER** -- more data (this session's other lever)
+helped; a bigger base model, transplanted naively, did not.
+
+Also hit a new infra issue: converting the large-v2 Lightning checkpoint
+(fuller optimizer state than `small`) on the login node got silently
+SIGKILL'd (exit 137, no error text -- looks like a hang unless you check the
+real exit code past a pipe). Fixed by running the converter as a small CPU
+sbatch job instead of interactively (see commit `0aa4e28`).
+
 ---
 
 ## Environmental hazards to know about
