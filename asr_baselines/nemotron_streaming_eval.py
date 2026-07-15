@@ -24,6 +24,20 @@ must be smoke-tested on a real compute-node job before trusting the numbers).
   python -m asr_baselines.nemotron_streaming_eval \
     --model $EXP/nemotron_patient.nemo --manifest val.jsonl \
     --out streaming_hyps.tsv
+
+--word-lag adds the Nemotron counterpart to whisper_streaming_eval.py's TTFT /
+word-commit-lag metrics, via NeMo's RNNT per-word frame-offset timestamps
+(model.cfg.decoding.compute_timestamps=True). Frame-synchronous by
+construction (each word's offset is the encoder frame it was decoded from),
+so in principle more precise than Whisper's attention-derived word timestamps
+-- but the exact offset semantics were confirmed only by empirical probing on
+nemo_toolkit==2.7.3 (no official docs read for this), and required a
+workaround for a real library bug: compute_timestamps=True turns
+Hypothesis.timestamp from a list into a dict, but conformer_stream_step's
+carried-state merge on the following chunk assumes it's still a list and
+crashes (AttributeError: 'dict' object has no attribute 'extend') --
+worked around by restoring the list form after extracting each step's new
+words, before the object re-enters the merge path on the next chunk.
 """
 
 import argparse
@@ -65,11 +79,17 @@ def main():
                         "per-utterance stats -- offline transcribe() normalizes over the "
                         "FULL utterance, which peeks at future audio a true streaming "
                         "deployment can't see; this flag removes that unfairness")
+    p.add_argument("--word-lag", action="store_true",
+                   help="report per-word commit lag (word spoken -> text visible) and "
+                        "TTFT, the Nemotron counterpart to whisper_streaming_eval.py's "
+                        "same metrics. Opt-in: leaves default WER-only runs byte-identical "
+                        "to before this flag existed.")
     args = p.parse_args()
 
     import torch
     import nemo.collections.asr as nemo_asr
     from nemo.collections.asr.parts.utils.streaming_utils import CacheAwareStreamingAudioBuffer
+    from omegaconf import open_dict
 
     if args.model.endswith(".nemo") and os.path.isfile(args.model):
         model = nemo_asr.models.ASRModel.restore_from(args.model)
@@ -83,12 +103,29 @@ def main():
     print(f"streaming_cfg: chunk_size={cfg.chunk_size} shift_size={cfg.shift_size} "
           f"pre_encode_cache_size={cfg.pre_encode_cache_size}")
 
+    if args.word_lag:
+        # Word-level timestamps: NeMo's RNNT decoding attaches frame-index
+        # offsets per word (verified empirically on this nemo_toolkit==2.7.3 --
+        # not documented as stable across versions). Purely additive metadata
+        # over already-decided greedy tokens; does not change WER.
+        with open_dict(model.cfg):
+            model.cfg.decoding.compute_timestamps = True
+            model.cfg.decoding.greedy.compute_timestamps = True
+        model.change_decoding_strategy(model.cfg.decoding)
+        subsampling_factor = model.encoder.subsampling_factor
+        window_stride = model.cfg.preprocessor.window_stride
+        frame_to_sec = subsampling_factor * window_stride
+        print(f"word-lag: subsampling_factor={subsampling_factor} "
+              f"window_stride={window_stride} -> frame_to_sec={frame_to_sec}")
+
     items = read_manifest(args.manifest)
     refs, hyps = [], []
     total_audio = 0.0
     total_elapsed = 0.0
     total_chunks = 0
     device = next(model.parameters()).device
+    ttft_sims = []       # stream start -> first text visible
+    word_lags = []       # word finished being SPOKEN -> its text visible
 
     for it in items:
         path = it["audio_filepath"]
@@ -105,9 +142,19 @@ def main():
         previous_hypotheses = None
         pred_out_stream = None
         transcribed_texts = None
+        # Latency in SIMULATED REAL TIME, same convention as
+        # whisper_streaming_eval.py: the eval loop feeds chunks as fast as the
+        # GPU eats them, but a live user records chunk k over [k*shift, (k+1)*
+        # shift], so its text can appear no earlier than that chunk's audio
+        # becoming available plus this step's compute. Valid while per-chunk
+        # compute < chunk duration (RTF<1).
+        audio_consumed_sec = 0.0
+        prev_word_count = 0
+        utt_ttft = None
 
         t0 = time.time()
         for step_num, (chunk_audio, chunk_lengths) in enumerate(streaming_buffer):
+            tc = time.time()
             with torch.inference_mode():
                 (
                     pred_out_stream,
@@ -128,7 +175,38 @@ def main():
                     drop_extra_pre_encoded=cfg.drop_extra_pre_encoded if step_num != 0 else 0,
                     return_transcription=True,
                 )
+            compute = time.time() - tc
             total_chunks += 1
+            if args.word_lag:
+                # chunk_lengths is in PRE-subsampling feature-frame units (same
+                # hop as window_stride, before the encoder's own subsampling_factor
+                # collapses them) -- confirmed by the CacheAwareStreamingAudioBuffer
+                # feeding processed_signal (mel features) rather than raw audio.
+                audio_consumed_sec += chunk_lengths.item() * window_stride
+                emit_sim = audio_consumed_sec + compute
+                step_hyp = transcribed_texts[0]
+                ts = getattr(step_hyp, "timestamp", None)
+                if isinstance(ts, dict):
+                    words = ts.get("word", [])
+                    if words and utt_ttft is None:
+                        utt_ttft = emit_sim
+                        ttft_sims.append(emit_sim)
+                    for w in words[prev_word_count:]:
+                        word_end_sec = float(w["end_offset"]) * frame_to_sec
+                        word_lags.append(emit_sim - word_end_sec)
+                    prev_word_count = len(words)
+                    # WORKAROUND: compute_timestamps=True turns hyp.timestamp
+                    # into a dict, but conformer_stream_step's carried-state
+                    # merge_() on the NEXT chunk does self.timestamp.extend(...),
+                    # which requires a list. previous_hypotheses is this SAME
+                    # object (aliased, not copied) fed straight back in above --
+                    # restore the raw list form so the next step's merge doesn't
+                    # crash with AttributeError: 'dict' object has no attribute
+                    # 'extend'. Verified empirically (job-based probe) that this
+                    # doesn't lose any decoding state -- only the timestamp
+                    # bookkeeping gets rebuilt (from the same underlying data)
+                    # every step.
+                    step_hyp.timestamp = ts["timestep"]
         total_elapsed += time.time() - t0
 
         hyp = transcribed_texts[0]
@@ -142,6 +220,20 @@ def main():
           f"RTF={rtf:.3f}  chunks={total_chunks}  "
           f"{1000*total_elapsed/max(total_chunks,1):.1f} ms/chunk  "
           f"({total_elapsed:.1f}s / {total_audio:.1f}s audio)")
+
+    def pctl(xs, q):
+        return sorted(xs)[min(len(xs) - 1, int(q * (len(xs) - 1)))]
+    if ttft_sims:
+        import statistics
+        print(f"TTFT (stream start -> first text, simulated real-time): "
+              f"mean {statistics.mean(ttft_sims):.2f}s  p50 {pctl(ttft_sims, .5):.2f}s  "
+              f"p95 {pctl(ttft_sims, .95):.2f}s  (n={len(ttft_sims)}; includes any "
+              f"leading silence before the first word)")
+    if word_lags:
+        import statistics
+        print(f"word commit lag (word spoken -> text visible): "
+              f"mean {statistics.mean(word_lags):.2f}s  p50 {pctl(word_lags, .5):.2f}s  "
+              f"p95 {pctl(word_lags, .95):.2f}s  (n={len(word_lags)} words)")
     if args.out:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write("path\tref\thyp\n")

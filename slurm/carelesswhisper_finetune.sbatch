@@ -26,7 +26,13 @@
 #
 # ALL recipe knobs are set explicitly below -- do not trust upstream CLI
 # defaults to match their README examples (they don't: e.g. rank defaults to
-# 16 in code, 32 in the README base recipe).
+# 16 in code, 32 in the README base recipe). Their large-v2 README example
+# uses a DIFFERENT recipe (rank=4, batch=4) from the small/base one (rank=32,
+# batch=16) -- naively reusing the small recipe on large-v2 produced val WER
+# ~2x worse than small itself (71.9% vs 30.5%), and using their own large-v2
+# recipe only helped marginally (69.9%) -- see
+# results/whisper_streaming_investigation_2026-07-09.md. Model size is not a
+# free lever here; more training data helped far more than a bigger base.
 #
 #   TRAIN_CSV=... VAL_CSV=... TEST_CSV=... \
 #   SIZE=small GRAN=15 sbatch slurm/carelesswhisper_finetune.sbatch
@@ -34,6 +40,24 @@
 # GRAN is in 20ms encoder frames: 15 = 300ms chunks (their headline config).
 # Note their --size list stops at large-v2; there is NO large-v3 option, so
 # this is not an apples-to-apples finetune of our large-v3 offline models.
+#
+# SEED is hardcoded (3407) in their train.py with no CLI override -- we
+# sed-patch it (idempotent) so SEED=<n> here actually takes effect, needed
+# for multi-seed variance runs (LoRA finetunes on this project's data sizes
+# swing double-digit points across seeds, see patient-avsr-wer-variance).
+#
+# EARLY_STOP=1 adds --early_stop (their EarlyStopping callback: monitors
+# val/wer, patience=2, mode=min) -- pair with a higher EPOCHS ceiling since
+# the callback, not EPOCHS, now decides when training actually stops.
+#
+# FULL_FINETUNE=1 patches whisper_module.py (idempotent) to unfreeze every
+# param, not just LoRA's, at runtime -- their codebase has NO CLI flag for
+# this, LoRA is the only supported mode by construction (the freeze loop is
+# unconditional). Full FT means more capacity to fit patient speech, but
+# also more capacity to overfit ~300 training clips; LoRA's small parameter
+# count is itself a regularizer against exactly that. Try on `small` first,
+# not `large-v2` -- large-v2's already-poor LoRA result (data-limited, not
+# capacity-limited) suggests full FT there would overfit worse, not better.
 
 set -euo pipefail
 
@@ -52,7 +76,12 @@ mkdir -p "/scratch/${USER}/auto-avsr/output" "${CW_RUNS}/logs" "${CW_RUNS}/ckpts
 # Recipe (their README base/small fixed-chunk example, adapted): every value
 # explicit, none inherited from upstream argparse defaults.
 export DATASET_NAME="${DATASET_NAME:-PATIENT}"
-export RUN_NAME="${RUN_NAME:-patient_$(basename ${TRAIN_CSV} .csv)}"
+export SEED="${SEED:-3407}"             # their hardcoded default; override for multi-seed runs
+# Their checkpoint dirpath is built from cfg.name (RUN_NAME) but NOT the
+# seed -- concurrent seed runs with the same default RUN_NAME would write
+# into the identical checkpoint directory and clobber each other's epoch
+# files. Seed is in the default so this doesn't need remembering per-call.
+export RUN_NAME="${RUN_NAME:-patient_$(basename ${TRAIN_CSV} .csv)_seed${SEED}}"
 export SIZE="${SIZE:-small}"            # tiny|base|small|medium|large|large-v2 (no v3!)
 export GRAN="${GRAN:-15}"               # encoder frames of 20ms; 15 = 300ms chunk
 export EXTRA_GRAN_BLOCKS="${EXTRA_GRAN_BLOCKS:-1}"
@@ -62,11 +91,49 @@ export EPOCHS="${EPOCHS:-10}"
 export LR="${LR:-1e-5}"
 export STREAMING_FRACTION="${STREAMING_FRACTION:-0.25}"
 export TOP_K="${TOP_K:-5}"
+export EARLY_STOP="${EARLY_STOP:-0}"    # 1 = --early_stop (monitors val/wer, patience=2)
+export FULL_FINETUNE="${FULL_FINETUNE:-0}"  # 1 = unfreeze all params, not just LoRA (patches vendored code)
 
 # Point train.py's hardcoded output roots at scratch (idempotent).
 sed -i "s|/mlspeech/data/tomer/streaming_whisper/models/logs|${CW_RUNS}/logs|; \
         s|/mlspeech/data/tomer/streaming_whisper/models/ckpts|${CW_RUNS}/ckpts|" \
   "${CARELESS_DIR}/training_code/train.py"
+
+# SEED = 3407 is a literal, no CLI override. Patch it ONCE to read from an
+# env var at runtime instead of sed-substituting the literal value each run
+# -- substituting the literal would race if multiple seed runs share this
+# checkout concurrently (same class of bug as the MFA model-extraction race
+# hit earlier: job A patches SEED=1, job B's sed pattern no longer matches
+# the now-changed line and silently no-ops, so both jobs could end up
+# training with whatever value lost the race). Reading from env at import
+# time is safe under concurrency since the file is written only once, ever.
+sed -i 's|^SEED = 3407$|SEED = int(os.environ.get("CARELESSWHISPER_SEED", 3407))|' \
+  "${CARELESS_DIR}/training_code/train.py"
+grep -q '^SEED = int(os.environ.get("CARELESSWHISPER_SEED", 3407))$' "${CARELESS_DIR}/training_code/train.py" || {
+  echo "[FATAL] SEED patch didn't take (train.py's SEED line format changed upstream?)" >&2; exit 4; }
+export CARELESSWHISPER_SEED="${SEED}"
+
+# whisper_module.py's LoRAStreamedWhisper hardcodes `p.requires_grad = False`
+# for every non-LoRA param -- no CLI flag exists to disable this. Patch it to
+# check an env var at runtime instead (idempotent: no-ops if already patched).
+FULL_FT_MARKER="CARELESSWHISPER_FULL_FINETUNE"
+if ! grep -q "${FULL_FT_MARKER}" "${CARELESS_DIR}/training_code/whisper_module.py"; then
+  python3 - "${CARELESS_DIR}/training_code/whisper_module.py" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+old = '''        for n, p in self.model.named_parameters():
+            if "lora" not in n:
+                p.requires_grad = False'''
+new = '''        import os as _os_ft
+        _full_ft = _os_ft.environ.get("CARELESSWHISPER_FULL_FINETUNE") == "1"
+        for n, p in self.model.named_parameters():
+            if not _full_ft and "lora" not in n:
+                p.requires_grad = False'''
+assert old in src, "freeze-loop text not found -- upstream code changed?"
+open(path, "w").write(src.replace(old, new, 1))
+PYEOF
+fi
 
 # whisper_rt.audio imports pyaudio unconditionally at module load (live-mic
 # path, never used here); train.py has no stub for it, unlike our eval
@@ -103,9 +170,14 @@ export PATH="${CW_ENV}/bin:${PATH}"
 # --no_logger, and instead force their hardcoded WandbLogger offline (no
 # account, no network, writes local files under ${CW_RUNS}/logs/wandb/).
 export WANDB_MODE=offline
+[[ "${FULL_FINETUNE}" == "1" ]] && export CARELESSWHISPER_FULL_FINETUNE=1
+
+EARLY_STOP_FLAG=""
+[[ "${EARLY_STOP}" == "1" ]] && EARLY_STOP_FLAG="--early_stop"
 
 echo "Starting CarelessWhisper finetune at $(date) on $(hostname):"
-echo "  SIZE=${SIZE} GRAN=${GRAN} RANK=${RANK} BATCH_SIZE=${BATCH_SIZE} EPOCHS=${EPOCHS} LR=${LR}"
+echo "  SIZE=${SIZE} GRAN=${GRAN} RANK=${RANK} BATCH_SIZE=${BATCH_SIZE} EPOCHS=${EPOCHS} LR=${LR} SEED=${SEED}"
+echo "  EARLY_STOP=${EARLY_STOP} FULL_FINETUNE=${FULL_FINETUNE}"
 echo "  TRAIN_CSV=${TRAIN_CSV}"
 
 "${CW_PY}" training_code/train.py \
@@ -123,7 +195,8 @@ echo "  TRAIN_CSV=${TRAIN_CSV}"
   --extra_gran_blocks "${EXTRA_GRAN_BLOCKS}" \
   --streaming_fraction "${STREAMING_FRACTION}" \
   --top_k "${TOP_K}" \
-  --strategy auto
+  --strategy auto \
+  ${EARLY_STOP_FLAG}
 
 echo "Finished at $(date). Checkpoints under ${CW_RUNS}/ckpts/"
 echo "NOTE: lightning .ckpt != the dims/cfg/state_dict .pt that"
