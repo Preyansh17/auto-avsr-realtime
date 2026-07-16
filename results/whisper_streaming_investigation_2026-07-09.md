@@ -758,6 +758,38 @@ capacity to adapt. Only one seed tried per full-FT config so far; per
 [[patient-avsr-wer-variance]], treat the small-vs-large-v2 tie as
 directional, not confirmed, until seeded.
 
+## 2026-07-16: SpecAugment closes another chunk of the gap
+
+Their codebase has zero data augmentation. Full-FT's fast convergence with
+train loss near zero by epoch 4-6 (both small and large-v2 full-FT runs)
+was a clear memorization signature on ~314 training clips -- a natural next
+lever. Wired in this repo's existing Green-parameterized SpecAugment
+(`asr_baselines/specaugment.py` -- cut frequency masking, blown-up time
+masking, already used for the Whisper/Nemotron pipelines) via a new
+`SPECAUG=1` flag on `carelesswhisper_finetune.sbatch`. Their dataset classes
+have no hook for this, so it required patching `datasets_classes.py`
+(`AlignedTextGridDatasetLMDB.__getitem__`, applying the mask to the computed
+mel spectrogram on the train split only) and `whisper_module.py`'s
+`get_dataset` (which never passed a real `augment`/`split` distinction
+through, despite a vestigial unused `split` constructor param already
+existing) -- both patches idempotent, env-var-gated, dry-run-verified
+against copies of the real cluster files (not just locally compiled) before
+deploying, same pattern as the other vendored-code patches in this file.
+
+**Full-FT + SpecAugment, small, merged, seed 3407: test WER 34.08%** --
+down from 40.81% without augmentation. Val WER also improved (22.4% -> 20.0%
+best epoch), consistent with augmentation genuinely reducing overfitting
+rather than just adding eval-time noise. Latency floor unaffected as always
+(TTFT p50 0.62s, word-lag p50 0.04s).
+
+**Updated best-known result: 34.08% test WER** (full-FT + SpecAugment,
+small, merged domain) -- the strongest number in the whole investigation,
+closing roughly three-quarters of the gap between zero-shot garbage (125%)
+and the 14.4% SimulStreaming reference. Not yet tried: SpecAugment on
+large-v2 full-FT (should compose similarly given the mechanism is
+architecture-independent), or combined with more data/longer training.
+Still one seed only.
+
 ---
 
 ## Environmental hazards to know about
