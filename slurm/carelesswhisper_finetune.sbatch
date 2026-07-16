@@ -38,8 +38,15 @@
 #   SIZE=small GRAN=15 sbatch slurm/carelesswhisper_finetune.sbatch
 #
 # GRAN is in 20ms encoder frames: 15 = 300ms chunks (their headline config).
-# Note their --size list stops at large-v2; there is NO large-v3 option, so
-# this is not an apples-to-apples finetune of our large-v3 offline models.
+# CORRECTED (was wrong earlier): SIZE=large-v3 DOES work -- "no large-v3"
+# only applies to their pre-released zero-shot streaming checkpoints (HF hub
+# only has base/small/large-v2). Training from scratch via
+# load_streaming_model_for_train downloads from the generic OpenAI _MODELS
+# dict, which includes large-v3, and whisper_rt's mel pipeline explicitly
+# supports both 80-bin (v1/v2/small/base) and 128-bin (v3) filterbanks,
+# threaded dynamically from model.dims.n_mels -- not hardcoded to 80.
+# Verified by reading the code (mel_filters() asserts n_mels in {80, 128})
+# before spending a GPU-hour confirming it, not by trial and error.
 #
 # SEED is hardcoded (3407) in their train.py with no CLI override -- we
 # sed-patch it (idempotent) so SEED=<n> here actually takes effect, needed
@@ -60,6 +67,17 @@
 # relative to its own size even though the same rank was fine for small
 # (240M). Full-FT large-v2 needs BATCH_SIZE=4 for memory headroom
 # (unfreezing 1.6B params costs real AdamW memory) but fits fine.
+#
+# Full-FT checkpoints are MUCH bigger than LoRA's (weights + full optimizer
+# state for every trainable param, ~6GB per checkpoint for large-v2/v3 vs
+# ~1GB for LoRA-small): default TOP_K=5 x that size across a couple of
+# full-FT large-model runs exhausted the scratch quota mid-training (a real
+# large-v3 run OOM'd on disk, not GPU memory -- `OSError: Disk quota
+# exceeded` from a tqdm progress-bar write, easy to misread as unrelated).
+# Pass TOP_K=1 or 2 for full-FT runs on large-v2/v3, and delete a run's raw
+# checkpoint directory under ${CW_RUNS}/ckpts/ once you've extracted the one
+# checkpoint you need via convert_carelesswhisper_ckpt.py -- the small
+# converted .pt in ckpts_finetuned/ is all that's actually needed afterward.
 #
 # SPECAUG=1 applies SpecAugment (this repo's asr_baselines/specaugment.py,
 # Green-parameterized for dysarthric speech: cut freq masking, blow up time
