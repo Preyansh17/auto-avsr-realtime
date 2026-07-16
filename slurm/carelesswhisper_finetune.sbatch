@@ -53,11 +53,21 @@
 # FULL_FINETUNE=1 patches whisper_module.py (idempotent) to unfreeze every
 # param, not just LoRA's, at runtime -- their codebase has NO CLI flag for
 # this, LoRA is the only supported mode by construction (the freeze loop is
-# unconditional). Full FT means more capacity to fit patient speech, but
-# also more capacity to overfit ~300 training clips; LoRA's small parameter
-# count is itself a regularizer against exactly that. Try on `small` first,
-# not `large-v2` -- large-v2's already-poor LoRA result (data-limited, not
-# capacity-limited) suggests full FT there would overfit worse, not better.
+# unconditional). This is the single biggest lever found so far: full FT
+# beat every LoRA config on BOTH small (40.81% test WER) and large-v2
+# (39.91%, ties small) -- LoRA rank is a fixed trainable-param budget
+# independent of base size, so it was starving large-v2 (1.6B params)
+# relative to its own size even though the same rank was fine for small
+# (240M). Full-FT large-v2 needs BATCH_SIZE=4 for memory headroom
+# (unfreezing 1.6B params costs real AdamW memory) but fits fine.
+#
+# SPECAUG=1 applies SpecAugment (this repo's asr_baselines/specaugment.py,
+# Green-parameterized for dysarthric speech: cut freq masking, blow up time
+# masking) to the train split only -- their codebase has no augmentation at
+# all. Patches datasets_classes.py + whisper_module.py's get_dataset
+# (idempotent). Motivation: full-FT converges in ~4 epochs on ~300 clips
+# with train loss near zero (clear memorization) -- augmentation is cheap
+# insurance against exactly that.
 
 set -euo pipefail
 
@@ -93,6 +103,7 @@ export STREAMING_FRACTION="${STREAMING_FRACTION:-0.25}"
 export TOP_K="${TOP_K:-5}"
 export EARLY_STOP="${EARLY_STOP:-0}"    # 1 = --early_stop (monitors val/wer, patience=2)
 export FULL_FINETUNE="${FULL_FINETUNE:-0}"  # 1 = unfreeze all params, not just LoRA (patches vendored code)
+export SPECAUG="${SPECAUG:-0}"          # 1 = SpecAugment on train split (patches vendored code)
 
 # Point train.py's hardcoded output roots at scratch (idempotent).
 sed -i "s|/mlspeech/data/tomer/streaming_whisper/models/logs|${CW_RUNS}/logs|; \
@@ -135,6 +146,93 @@ open(path, "w").write(src.replace(old, new, 1))
 PYEOF
 fi
 
+# SpecAugment: their codebase has none. Copy this repo's implementation into
+# the checkout (always -- cheap, keeps it in sync with our source of truth)
+# and patch AlignedTextGridDatasetLMDB (the only dataset class our
+# --streaming_train path actually uses) to apply it on the train split only,
+# gated by CARELESSWHISPER_SPECAUG at runtime.
+cp "${PROJECT_ROOT}/asr_baselines/specaugment.py" \
+   "${CARELESS_DIR}/training_code/carelesswhisper_specaugment.py"
+
+SPECAUG_MARKER="carelesswhisper_specaugment"
+if ! grep -q "${SPECAUG_MARKER}" "${CARELESS_DIR}/training_code/datasets_classes.py"; then
+  python3 - "${CARELESS_DIR}/training_code/datasets_classes.py" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+
+# 1) import (top of file, right after the whisper_rt.tokenizer import)
+marker_import = "from training_code.carelesswhisper_specaugment import build_specaugment\n"
+anchor = "import whisper_rt.tokenizer\n"
+assert anchor in src, "import anchor not found -- upstream imports changed?"
+src = src.replace(anchor, anchor + marker_import, 1)
+
+# 2) constructor: add `augment` param + build self.specaug.
+# The trailing-comment-free `split='train'):` signature is unique to
+# AlignedTextGridDatasetLMDB -- the other AlignedTextGridDataset class has a
+# comment on that line, so this text does not match it.
+old_sig = """                 multilingual: bool = False,
+                 separator='\\t',
+                 split='train'):
+        super().__init__()"""
+new_sig = """                 multilingual: bool = False,
+                 separator='\\t',
+                 split='train',
+                 augment: bool = False):
+        super().__init__()"""
+assert old_sig in src, "LMDB dataset __init__ signature not found -- upstream code changed?"
+src = src.replace(old_sig, new_sig, 1)
+
+BLANK8 = " " * 8  # the "blank" line here is 8 trailing spaces, not truly empty
+old_body = ("        self.n_mels = n_mels\n"
+            "        self.multilingual = multilingual\n"
+            + BLANK8 + "\n"
+            "        # LMDB Setup\n"
+            "        self.lmdb_paths = lmdb_paths")
+new_body = """        self.n_mels = n_mels
+        self.multilingual = multilingual
+        self.augment = augment
+        self.specaug = build_specaugment() if augment else None
+
+        # LMDB Setup
+        self.lmdb_paths = lmdb_paths"""
+assert old_body in src, "LMDB dataset __init__ body not found -- upstream code changed?"
+src = src.replace(old_body, new_body, 1)
+
+# 3) __getitem__: apply after mel is computed, before intervals are loaded.
+old_getitem = ('        # 1. Load Audio\n'
+               '        audio = whisper_rt.pad_or_trim(whisper_rt.load_audio(item["wav_path"], sr=self.sr))\n'
+               '        mel = self._calc_mel(audio)\n'
+               + BLANK8 + '\n'
+               '        # 2. Load Intervals (Logic Check: LMDB vs File System)')
+new_getitem = """        # 1. Load Audio
+        audio = whisper_rt.pad_or_trim(whisper_rt.load_audio(item["wav_path"], sr=self.sr))
+        mel = self._calc_mel(audio)
+        if self.specaug is not None:
+            mel = self.specaug(mel)
+
+        # 2. Load Intervals (Logic Check: LMDB vs File System)"""
+assert old_getitem in src, "LMDB dataset __getitem__ mel-calc text not found -- upstream code changed?"
+src = src.replace(old_getitem, new_getitem, 1)
+
+open(path, "w").write(src)
+PYEOF
+fi
+
+# whisper_module.py's get_dataset never passes augment= -- wire it to the
+# split (train only) and the runtime env var toggle.
+if ! grep -q "CARELESSWHISPER_SPECAUG" "${CARELESS_DIR}/training_code/whisper_module.py"; then
+  python3 - "${CARELESS_DIR}/training_code/whisper_module.py" <<'PYEOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+old = 'return AlignedTextGridDatasetLMDB(ds_path=ds_path, lmdb_paths=self.lmdb_paths, get_streamed_mel=True, gran=self.enc_emb_gran, extra_gran_blocks=self.enc_context, n_mels=self.model.dims.n_mels, multilingual=self.cfg.multilingual)'
+new = 'return AlignedTextGridDatasetLMDB(ds_path=ds_path, lmdb_paths=self.lmdb_paths, get_streamed_mel=True, gran=self.enc_emb_gran, extra_gran_blocks=self.enc_context, n_mels=self.model.dims.n_mels, multilingual=self.cfg.multilingual, augment=(split == "train" and __import__("os").environ.get("CARELESSWHISPER_SPECAUG") == "1"))'
+assert old in src, "get_dataset LMDB call not found -- upstream code changed?"
+open(path, "w").write(src.replace(old, new, 1))
+PYEOF
+fi
+
 # whisper_rt.audio imports pyaudio unconditionally at module load (live-mic
 # path, never used here); train.py has no stub for it, unlike our eval
 # script. Drop an equivalent stub into the env (idempotent).
@@ -171,13 +269,14 @@ export PATH="${CW_ENV}/bin:${PATH}"
 # account, no network, writes local files under ${CW_RUNS}/logs/wandb/).
 export WANDB_MODE=offline
 [[ "${FULL_FINETUNE}" == "1" ]] && export CARELESSWHISPER_FULL_FINETUNE=1
+[[ "${SPECAUG}" == "1" ]] && export CARELESSWHISPER_SPECAUG=1
 
 EARLY_STOP_FLAG=""
 [[ "${EARLY_STOP}" == "1" ]] && EARLY_STOP_FLAG="--early_stop"
 
 echo "Starting CarelessWhisper finetune at $(date) on $(hostname):"
 echo "  SIZE=${SIZE} GRAN=${GRAN} RANK=${RANK} BATCH_SIZE=${BATCH_SIZE} EPOCHS=${EPOCHS} LR=${LR} SEED=${SEED}"
-echo "  EARLY_STOP=${EARLY_STOP} FULL_FINETUNE=${FULL_FINETUNE}"
+echo "  EARLY_STOP=${EARLY_STOP} FULL_FINETUNE=${FULL_FINETUNE} SPECAUG=${SPECAUG}"
 echo "  TRAIN_CSV=${TRAIN_CSV}"
 
 "${CW_PY}" training_code/train.py \
