@@ -790,6 +790,47 @@ large-v2 full-FT (should compose similarly given the mechanism is
 architecture-independent), or combined with more data/longer training.
 Still one seed only.
 
+## 2026-07-16 (later): SpecAugment on large-v2 -- mixed, not a clean win
+
+Tried the obvious follow-up: SpecAugment + full-FT on large-v2 (same
+`BATCH_SIZE=4` memory-safety setting as before). First attempt (with
+`--early_stop`) was a clear failure: val WER stuck at 72-73% across 3
+epochs, early-stopped almost immediately, test WER **92.38%** -- worse than
+doing nothing. Train loss and the pattern (val WER *worsening* epoch 0->1)
+made this look like the run was cut off before real adaptation started, not
+a genuine plateau -- their `patience=2` was tuned against the unaugmented
+large-v2 full-FT run's convergence speed (reached 26.9% val WER by epoch 2),
+and augmentation plus the small `batch=4` (noisier per-step gradients, no
+CLI patience override exists) needed more epochs before showing signal.
+
+Reran without `--early_stop`, fixed 15 epochs: val WER dropped steadily
+(51.7% -> 38.2% -> 27.7% ... -> **20.8%** at epoch 13, still trending down
+noisily, not clearly plateaued) -- confirms the early-stop theory. But the
+**test WER on the best checkpoint (epoch 13): 41.70%** -- worse than
+large-v2 full-FT WITHOUT SpecAugment (39.91%), despite the much better val
+number. Latency floor still fine (TTFT p50 0.69s, word-lag p50 0.11s).
+
+**Honest reading: SpecAugment does NOT reproduce its `small`-model win on
+large-v2.** Small: 40.81% -> 34.08% (clear win). Large-v2: 39.91% -> 41.70%
+(marginally worse, within likely seed/eval noise on a 40-clip test set, but
+not an improvement either way). Plausible explanations, untested: large-v2's
+much smaller `batch=4` interacts with SpecAugment's default masking
+aggressiveness differently than `small`'s `batch=16` (proportionally more
+of each batch masked-in-effect at small batch size); or the val-epoch-13
+checkpoint, while best on val, is a val/test mismatch artifact on this tiny
+test set; or large-v2 genuinely needs a lighter augmentation config than the
+Green defaults tuned for the smaller model. Not chased further this
+session -- **the practical best-known config remains full-FT + SpecAugment
+on `small` (34.08%)**, which is also ~6x cheaper to train.
+
+Also worth noting for reproducibility: two runs of nominally the "same"
+epoch 0 (same seed, same config, only `--early_stop` differed) produced
+very different val WER (72.0% vs 51.7%) -- likely DataLoader worker
+non-determinism (16 workers requested on an 8-core node, a warning already
+present in every run's log) rather than a real seed effect. Single-epoch
+comparisons on this pipeline are not reliable; only trust multi-epoch
+trends and final test numbers.
+
 ---
 
 ## Environmental hazards to know about
