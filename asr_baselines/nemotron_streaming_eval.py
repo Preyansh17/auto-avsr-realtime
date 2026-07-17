@@ -74,6 +74,14 @@ def main():
                         "streaming already)")
     p.add_argument("--left-chunks", type=int, default=None,
                    help="left-context chunks kept in cache; default keeps pretrained config")
+    p.add_argument("--att-context-size", type=str, default=None,
+                   help="comma-separated pair 'left,right' selecting one of the model's "
+                        "discrete streaming lookahead presets (e.g. "
+                        "nemotron-speech-streaming-en-0.6b supports 70,13 (default, "
+                        "~1.12s/chunk) / 70,6 (~0.56s) / 70,1 (~0.16s) / 70,0 (~0.08s, "
+                        "fully causal) -- the correct lever, unlike --chunk-size/"
+                        "--left-chunks above which require both to be set and rarely do "
+                        "what you want")
     p.add_argument("--online-normalization", action="store_true",
                    help="use running mean/var feature normalization instead of "
                         "per-utterance stats -- offline transcribe() normalizes over the "
@@ -97,7 +105,10 @@ def main():
         model = nemo_asr.models.ASRModel.from_pretrained(args.model)
     model.eval()
 
-    if args.chunk_size is not None or args.left_chunks is not None:
+    if args.att_context_size is not None:
+        left, right = (int(x) for x in args.att_context_size.split(","))
+        model.encoder.setup_streaming_params(att_context_size=[left, right], left_chunks=args.left_chunks)
+    elif args.chunk_size is not None or args.left_chunks is not None:
         model.encoder.setup_streaming_params(chunk_size=args.chunk_size, left_chunks=args.left_chunks)
     cfg = model.encoder.streaming_cfg
     print(f"streaming_cfg: chunk_size={cfg.chunk_size} shift_size={cfg.shift_size} "

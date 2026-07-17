@@ -943,6 +943,28 @@ WER matches the earlier script exactly on both checkpoints -- both eval implemen
 
 Nemotron is both far cheaper to run **and** genuinely lower-latency once the metric is fixed -- the "architecturally-fixed chunk size dominates over compute speed" story from the earlier chunk-size-sweep section needs revisiting; it may have been an artifact of comparing against a mismeasured baseline rather than a real property of Nemotron's cache-aware streaming design. Not yet re-swept with the corrected metric (the earlier `att_context_size` sweep only has old-style TTFT); worth rerunning if this comparison needs to be trusted further.
 
+### Nemotron chunk-size sweep, re-run with the corrected metric: "not a useful lever" overturned too
+
+Reran the `att_context_size` sweep above (job 14077673) with `--att-context-size` added to `nemotron_streaming_eval.py` (the script whose `--word-lag` fix actually works) so every preset gets the same speech-anchored TTFT / word-lag correction just applied to the default preset.
+
+| att_context | Chunk duration | Checkpoint | WER | RTF | Old TTFT p50 | **New TTFT p50** | **Word-lag p50** |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| [70,13] (default) | 1.12s | legal_seed3 | 33.33% | 0.029 | 2.28s | **1.01s** | 0.86s |
+| [70,13] | 1.12s | merged_seed1 | 32.16% | 0.022 | 3.49s | **1.10s** | 0.99s |
+| [70,6] | 0.56s | legal_seed3 | 38.80% | 0.034 | 2.46s | **0.63s** | 0.72s |
+| [70,6] | 0.56s | merged_seed1 | 36.56% | 0.034 | 3.11s | **0.70s** | 0.72s |
+| [70,1] | 0.16s | legal_seed3 | 39.34% | 0.107 | 3.61s | **1.29s** | 1.74s |
+| [70,1] | 0.16s | merged_seed1 | 35.68% | 0.112 | 3.36s | **1.20s** | 1.57s |
+| [70,0] (fully causal) | 0.08s | legal_seed3 | 44.26% | 0.209 | 4.62s | **2.38s** | 3.19s |
+| [70,0] | 0.08s | merged_seed1 | 47.14% | 0.201 | 4.79s | **2.47s** | 3.19s |
+
+The old metric's flat "2.19s across all presets, chunk size doesn't move latency" reading was itself a silence-contamination artifact. Corrected, latency is **not flat -- it's non-monotonic in chunk size**:
+
+- **[70,6] is a genuine sweet spot**: new TTFT p50 drops to 0.63-0.70s, ~35% *below* the default preset's 1.01-1.10s, for a modest WER cost (+4-5pp, 32-33%→37-39%).
+- Shrinking further (**[70,1], [70,0]**) makes latency **worse, not better**: word-lag balloons 3-4x (0.7s→1.6-1.7s→3.2s) and RTF rises sharply (0.03→0.11→0.2, chunk count 155→1954 at fully-causal) -- the extra forward-pass overhead from far more, far smaller chunks outweighs the smaller nominal buffer. WER also craters (44-47%).
+
+**Revised conclusion: chunk size IS a useful lever for Nemotron, but the earlier sweep had both the metric and the recommended direction wrong.** The pretrained default isn't the best point on this axis -- [70,6] beats it on latency for a small WER cost -- but "smaller is better" doesn't hold either; fully causal is worse on every axis simultaneously. Same hyp TSVs/job as the original sweep, plus `--word-lag` outputs from job 14077673.
+
 ---
 
 ## Environmental hazards to know about

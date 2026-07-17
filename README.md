@@ -134,9 +134,16 @@ word-commit lag were added to both `whisper_streaming_eval.py` and
 
 Nemotron is both far cheaper to run **and** genuinely lower-latency once measured
 correctly — not "comparable or worse despite lower compute." Only checked on two
-checkpoints (`nemotron_fullft_3way_legal_seed3`/`merged_seed1`) so far; the earlier
-chunk-size sweep hasn't been rerun with the corrected metric. See
-`results/whisper_streaming_investigation_2026-07-09.md` for the full writeup.
+checkpoints (`nemotron_fullft_3way_legal_seed3`/`merged_seed1`) so far.
+
+**The chunk-size sweep's "not a useful lever" verdict (line 102-111 above) is also
+overturned.** Rerun with the corrected metric: latency is not flat across presets —
+`[70,6]` (0.56s chunk) actually beats the pretrained default `[70,13]` on TTFT
+(0.63-0.70s vs 1.01-1.10s, ~35% better) for a modest WER cost (+4-5pp). Shrinking
+further (`[70,1]`, `[70,0]`) makes latency *worse*, not better — word-lag triples
+and RTF rises sharply — so chunk size is a real, non-monotonic lever with a sweet
+spot at `[70,6]`, not a dead one. See
+`results/whisper_streaming_investigation_2026-07-09.md` for the full 8-run table.
 
 Video does not currently help: audio-only configs beat their audio-visual counterparts
 across every architecture tested. See `results/week_results_2026-06-23_2026-07-01.md`
