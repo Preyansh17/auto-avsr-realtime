@@ -831,6 +831,62 @@ present in every run's log) rather than a real seed effect. Single-epoch
 comparisons on this pipeline are not reliable; only trust multi-epoch
 trends and final test numbers.
 
+## 2026-07-16/17: large-v3 works, but confirms bigger is not better here
+
+Earlier in this file (the 2026-07-14 large-v2 sections), a comment claimed
+"there is NO large-v3 option" for this codebase. **That was wrong**, caught
+by re-reading the code rather than trusting the earlier note: `large-v3` is
+in the generic OpenAI `_MODELS` download dict used by
+`load_streaming_model_for_train` (training from scratch, as opposed to
+`load_streaming_model`, which loads their PRE-RELEASED zero-shot streaming
+checkpoints -- those do stop at large-v2, which is where the original
+confusion came from). `whisper_rt`'s mel pipeline (`mel_filters()`,
+`SpectrogramStream`) explicitly supports both 80-bin and 128-bin
+filterbanks (large-v3 uses 128), threaded dynamically from
+`model.dims.n_mels` rather than hardcoded -- verified in the source before
+spending a GPU-hour confirming it empirically.
+
+Ran full-FT + SpecAugment on `large-v3` (batch=4, no early-stop given the
+large-v2 lesson, 15 fixed epochs, `TOP_K=2` -- see below). It works
+end-to-end with zero code changes needed. Hit one real infra problem along
+the way: the first attempt died mid-epoch-2 with `OSError: Disk quota
+exceeded`, surfaced from an unrelated tqdm progress-bar write (looked like a
+random crash, not obviously a disk issue). Root cause: full-FT checkpoints
+bundle full optimizer state (~6GB each for large-v2/v3 vs ~1GB for
+LoRA-small), and `TOP_K=5` (the default) across several large-model full-FT
+runs from this session had accumulated ~376GB on scratch. Fixed by deleting
+raw Lightning checkpoint directories for runs already extracted via
+`convert_carelesswhisper_ckpt.py` (all needed outputs were safely in the
+small converted `.pt` files already) and resubmitting with `TOP_K=2`.
+
+**Result: val WER converged well (22.1% best, epoch 12) but test WER was
+53.36%** -- worse than large-v2's 41.70% and much worse than small's
+34.08%, despite a comparable-or-better validation number. Latency also
+crept up (TTFT p50 0.71s, word-lag p50 0.22s -- still well under
+SimulStreaming's ~1.4s, but the largest gap of any full-FT config tried).
+
+**The pattern across all three sizes is now unambiguous:**
+
+| Size | Val WER (best) | Test WER | Val→test gap |
+|---|---|---|---|
+| small | 20.0% | 34.08% | 14.1pp |
+| large-v2 | 20.8% | 41.70% | 20.9pp |
+| large-v3 | 22.1% | 53.36% | 31.3pp |
+
+Validation numbers stay roughly flat across sizes, but the val-to-test gap
+grows monotonically with model capacity -- bigger models are finding
+patterns that fit the 40-clip validation set (used for checkpoint
+selection) without generalizing to the held-out test set, on this small a
+training budget (314 clips). This is consistent with, and extends, the
+LoRA-rank finding from earlier in this file: model size was never a lever
+that helps here, first because LoRA rank was capacity-starving large-v2
+specifically, and now, even with full capacity and augmentation, bigger
+models overfit the selection signal more, not less.
+
+**Conclusion: `small` remains the right size for this data budget, no
+exceptions found yet.** Best-known config is unchanged: full-FT +
+SpecAugment, `small`, merged domain, **34.08% test WER**.
+
 ---
 
 ## Environmental hazards to know about
