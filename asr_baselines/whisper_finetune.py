@@ -74,6 +74,9 @@ def parse_args():
     p.add_argument("--train-decoder", action="store_true", help="also unfreeze the decoder (off = Green)")
     # SpecAugment (Whisper built-in). Green-leaning defaults: heavy time, light freq.
     p.add_argument("--no-specaug", action="store_true", help="ablation: disable SpecAugment")
+    p.add_argument("--speed-perturb", action="store_true",
+                   help="3x train data via Kaldi-style speed perturbation (0.9x/1.0x/1.1x). "
+                        "Train split only -- val/test stay unaugmented.")
     p.add_argument("--mask-time-prob", type=float, default=0.5)
     p.add_argument("--mask-time-length", type=int, default=40)
     p.add_argument("--mask-time-min-masks", type=int, default=2)
@@ -127,20 +130,39 @@ def configure_specaug(model, args):
           f"len={cfg.mask_feature_length}, min={cfg.mask_feature_min_masks})")
 
 
-class WhisperPatientDataset(torch.utils.data.Dataset):
-    """Maps (waveform, text) -> {input_features, labels} via the processor."""
+def speed_perturb(wav, factor, sr=16000):
+    """Kaldi-style speed perturbation: resample as if recorded at sr*factor, then
+    back to sr. Changes both tempo and pitch (unlike tempo-only stretching) --
+    this is the standard ASR augmentation recipe, not a tempo-preserving one."""
+    if factor == 1.0:
+        return wav
+    import torchaudio
+    wav_t = torch.from_numpy(wav).unsqueeze(0).float()
+    wav_t = torchaudio.functional.resample(wav_t, orig_freq=int(round(sr * factor)), new_freq=sr)
+    return wav_t.squeeze(0).numpy()
 
-    def __init__(self, examples, processor, max_label_length):
+
+class WhisperPatientDataset(torch.utils.data.Dataset):
+    """Maps (waveform, text) -> {input_features, labels} via the processor.
+
+    speed_factors expands each example into len(speed_factors) copies, one per
+    factor (e.g. [0.9, 1.0, 1.1] -> 3x the data). Only pass non-[1.0] factors
+    for the TRAIN split -- val/test must stay unaugmented."""
+
+    def __init__(self, examples, processor, max_label_length, speed_factors=(1.0,)):
         self.examples = examples
         self.processor = processor
         self.max_label_length = max_label_length
+        self.speed_factors = list(speed_factors)
 
     def __len__(self):
-        return len(self.examples)
+        return len(self.examples) * len(self.speed_factors)
 
     def __getitem__(self, idx):
-        ex = self.examples[idx]
+        ex = self.examples[idx // len(self.speed_factors)]
+        factor = self.speed_factors[idx % len(self.speed_factors)]
         wav = load_waveform(ex.path).numpy()
+        wav = speed_perturb(wav, factor)
         feats = self.processor.feature_extractor(wav, sampling_rate=16000).input_features[0]
         labels = self.processor.tokenizer(text=ex.text).input_ids[: self.max_label_length]
         return {"input_features": feats, "labels": labels}
@@ -195,7 +217,12 @@ def main():
     val_ex = load_audio_examples(args.root_dir, args.val_file, args.sp_model_path,
                                  max_frames=args.max_frames)
     print(f"train={len(train_ex)} val={len(val_ex)} examples")
-    train_ds = WhisperPatientDataset(train_ex, processor, args.max_label_length)
+    train_speed_factors = (0.9, 1.0, 1.1) if args.speed_perturb else (1.0,)
+    if args.speed_perturb:
+        print(f"speed perturbation ON: train_ds expands {len(train_ex)} -> "
+              f"{len(train_ex) * len(train_speed_factors)} examples ({train_speed_factors})")
+    train_ds = WhisperPatientDataset(train_ex, processor, args.max_label_length,
+                                     speed_factors=train_speed_factors)
     val_ds = WhisperPatientDataset(val_ex, processor, args.max_label_length)
     collator = DataCollatorSpeechSeq2Seq(processor)
 

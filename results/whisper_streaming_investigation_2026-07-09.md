@@ -967,6 +967,41 @@ The old metric's flat "2.19s across all presets, chunk size doesn't move latency
 
 ---
 
+## Whisper streaming WER: checkpoint soup and speed perturbation, both tested and closed negative (2026-07-17)
+
+Follow-up request: does anything actually improve Whisper's streaming WER (not offline -- the merged domain's 3-seed streaming mean, 17.04%, is the number that matters here)? Two untried levers, both on the merged domain, both evaluated the same way as the 3-seed baseline (bit-exact-converted checkpoint, 0.6s-segment SimulStreaming eval against the same held-out test40).
+
+### Checkpoint soup: no win
+
+Averaged the 3 seeds' HF `best` state dicts per domain (`scripts/soup_checkpoints.py`, plain `torch.stack(...).mean(0)` per tensor, no NaN/Inf in any of the 1260 averaged tensors across all 3 domains), converted to OpenAI format (`scripts/convert_soup.py`, converter round-trip verified exact against the soup's own HF source -- not bit-exact against any single seed, since the weights themselves are an average), and streaming-evaluated the merged soup:
+
+| Checkpoint | Streaming WER | TTFT p50 | Word-lag p50 |
+| --- | --- | --- | --- |
+| merged seed1 | 17.49% | | |
+| merged seed2 | 17.49% | | |
+| merged seed3 | 16.14% | | |
+| **merged soup (avg of 1/2/3)** | **17.04%** | 1.97s | 1.61s |
+
+The soup lands exactly at the 3-seed mean (17.04%) and is worse than the best individual seed (16.14%). Weight-averaging didn't cancel noise or find a better minimum here -- it just reproduced the average. Latency unaffected (TTFT/word-lag match the baseline range). **Not worth pursuing further as a Whisper streaming lever.**
+
+### Speed perturbation: looked like a win on 1 seed, reversed on 3
+
+Added `--speed-perturb` to `whisper_finetune.py` (3x train-data expansion via Kaldi-style resampling at 0.9x/1.0x/1.1x -- `speed_perturb()`, applied train-split only via `WhisperPatientDataset`'s new `speed_factors` param). Retrained merged domain, same recipe otherwise (large-v3 full-FT + SpecAugment, 30 epochs), all 3 seeds:
+
+| Seed | Offline WER | Streaming WER |
+| --- | --- | --- |
+| 1 | 8.97% | 14.80% |
+| 2 | 6.73% | 22.42% |
+| 3 | 11.21% | 16.59% |
+| **mean** | **8.97%** | **17.94%** |
+| *(baseline mean, no speed-perturb)* | *8.22%* | *17.04%* |
+
+Seed1 alone looked like a genuine win (14.80% vs baseline's 17.04% mean / 16.14% best seed) and was reported as such before seed2/3 finished. **The full 3-seed picture reverses that call**: mean streaming WER (17.94%) is actually *worse* than baseline (17.04%), and the spread across seeds exploded -- 14.80-22.42% (7.62pp range) vs baseline's 16.14-17.49% (1.35pp range). Offline WER also landed at essentially the baseline mean (8.97% vs 8.22%), so there's no clean offline/streaming split explaining it either -- speed perturbation just added variance without moving the center.
+
+**This is the exact single-seed trap the project has hit before (see the legacy-domain seed-flip finding earlier in this file, and [[patient-avsr-wer-variance]]): a single promising seed is not evidence of a real effect on a dataset this small (314 train clips, 40 test clips).** Both soup and speed-perturb are now closed as negative results for Whisper streaming WER on merged domain. New scripts: `scripts/soup_checkpoints.py`, `scripts/convert_soup.py`, `slurm/soup_checkpoints.sbatch`, `slurm/convert_soup.sbatch`, `slurm/whisper_speedperturb_finetune.sbatch` (parameterized by `SEED`), plus the `--speed-perturb`/`speed_perturb()` addition to `asr_baselines/whisper_finetune.py`.
+
+---
+
 ## Environmental hazards to know about
 
 - **`/home/pa2753` is at/near its inode quota** on the torch cluster — a `touch` failed even after freeing ~180 files. Not caused by this investigation specifically (pre-existing), but will block any future work that writes many small files there. Established mitigation pattern this whole project: keep envs, caches, and any file-heavy third-party code on `/scratch/pa2753/` instead of `/home/pa2753/`.
