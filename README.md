@@ -80,8 +80,23 @@ and a red-herring SLURM error message), in
 `results/whisper_streaming_investigation_2026-07-09.md`.
 | Whisper medium + SpecAugment, full finetune | offline | 9.8% | 2.6% |
 | AV Emformer, audio-only, LoRA (streaming-selected) | streaming | 26.8% | — |
-| Nemotron, full finetune, cache-aware streaming decode | streaming | 33.3% | 32.2% |
+| Nemotron, full finetune (30 epochs, untuned default), cache-aware streaming decode | streaming | 33.3% | 32.2% |
+| **Nemotron, full finetune (90 epochs, swept), cache-aware streaming decode** | streaming | **19.7%** | **18.6%** |
 | AV Emformer, audio-visual, LoRA (streaming-selected) | streaming | 36.6% | — |
+
+**Update (2026-07-17): Nemotron's 30-epoch number above was the untuned `--epochs 30`
+default, never swept.** Epoch count turned out to be the single biggest lever tried on
+Nemotron full-FT: 60 epochs reaches 20.2%/18.1%, 90 epochs (the confirmed sweet spot —
+120 already reverses) reaches 19.7%/18.6%, both on the exact same recipe otherwise
+(lr=1e-4, batch=2, grad_accum=2). A single merged-trained (epochs=90) model also
+generalizes to legacy at 13.5% WER cross-domain — far better than legacy-only training
+ever achieved (87-95% WER, AV Emformer era) — without any legacy-specific training data.
+Beam search decode adds a further 2-6pp offline but was confirmed **impossible in the
+streaming path**: NeMo's cache-aware carried-state loop only implements a merge path for
+greedy decode; both beam algorithms tried (`maes`, `malsd_batch`) raise an explicit
+`NotImplementedError` on partial-hypothesis merging. Full writeup, including the
+disk-quota trap hit mid-sweep and its cleanup, in
+`results/week_results_2026-07-14_2026-07-17.md`.
 
 Streaming latency, all measured via simulated real-time (chunk k's audio only
 exists at (k+1)*chunk_duration seconds, matching a live deployment):
