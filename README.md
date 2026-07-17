@@ -92,29 +92,51 @@ exists at (k+1)*chunk_duration seconds, matching a live deployment):
 | Whisper streaming (0.6s chunks) | 0.30-0.31 | ~170-180 | 2.0s | 1.5-1.7s |
 | Nemotron streaming | 0.019-0.026 | 19-26 | 2.2-3.3s | unavailable* |
 
-*Nemotron word-level timestamps hit a NeMo library bug: `compute_timestamps=True`
-crashes cache-aware streaming's carried partial-hypothesis state on both greedy
-decode paths (confirmed independently, see `results/whisper_streaming_investigation_2026-07-09.md`).
+*Nemotron word-level timestamps hit a NeMo library bug on the eval script this was
+first measured with: `compute_timestamps=True` crashes cache-aware streaming's
+carried partial-hypothesis state on both greedy decode paths in that script. A
+different eval script (`nemotron_streaming_eval.py --word-lag`) works around it
+differently and does have working word-level timestamps — see the correction below
+and `results/whisper_streaming_investigation_2026-07-09.md`.
 
 Tried shrinking Nemotron's chunk size (`att_context_size` presets `[70,13]`→`[70,0]`,
 1.12s down to 0.08s/chunk fully causal) hoping for a Whisper-style latency win — it
 isn't one. TTFT barely moves (2.2-3.3s → 2.2-2.3s, ~1s at best) while WER degrades
 sharply and monotonically (32-33%→44-47% at fully causal) and RTF rises 0.02→0.18.
 Nemotron's TTFT floor isn't set by its encoder chunk size; the pretrained default is
-already close to the best tradeoff available on this axis. Full sweep table in
-`results/whisper_streaming_investigation_2026-07-09.md`.
+already close to the best tradeoff available on this axis. **Caveat added
+2026-07-17: this TTFT was measured stream-start-anchored (includes leading
+silence), and Nemotron's silence contamination turned out to be much larger than
+Whisper's — see the correction immediately below before trusting the absolute TTFT
+values here.** Full sweep table in `results/whisper_streaming_investigation_2026-07-09.md`.
 
 Streaming Whisper (via [SimulStreaming](https://github.com/ufal/SimulStreaming)'s
 AlignAtt policy, `asr_baselines/whisper_streaming_eval.py`) costs ~1.7-1.9pp over
 offline Whisper but still beats every other streaming system's WER by ~17pp+.
 Nemotron has near-zero streaming *WER* penalty (its FastConformer encoder is
 architecturally causal/cache-aware already, unlike Whisper's bidirectional
-encoder — there's little "peek at the future" advantage for streaming to lose),
-but its native chunk size is large enough that **its actual first-word latency
-(TTFT ~2.2-3.3s) is comparable to or worse than Whisper's**, despite 10x lower
-per-chunk compute (19-26ms vs 170-217ms) — algorithmic (chunk-size) latency
-dominates over compute latency for Nemotron, the same pattern
-`scripts/benchmark_latency.py` calls out for the AV Emformer.
+encoder — there's little "peek at the future" advantage for streaming to lose).
+
+**Correction (2026-07-17): the "Nemotron's TTFT is comparable to or worse than
+Whisper's" claim above does not hold.** Both scripts' TTFT numbers were measured
+from stream start, including each clip's leading silence — and Nemotron's
+silence contamination (1.2-2.4s) turned out much larger than Whisper's (0-0.9s),
+making the comparison unfair rather than revealing a real Nemotron weakness. A
+speech-anchored TTFT (from the first word's own end-of-speech, not file start) plus
+word-commit lag were added to both `whisper_streaming_eval.py` and
+`nemotron_streaming_eval.py --word-lag` and rerun:
+
+| | Whisper (0.6s, `split_v1` mean) | Nemotron |
+| --- | --- | --- |
+| Speech-anchored TTFT | ~1.7s | **~1.0-1.1s** |
+| Word-commit lag | ~1.6s | **~0.86-0.99s** |
+| RTF | ~0.30 | ~0.02-0.03 |
+
+Nemotron is both far cheaper to run **and** genuinely lower-latency once measured
+correctly — not "comparable or worse despite lower compute." Only checked on two
+checkpoints (`nemotron_fullft_3way_legal_seed3`/`merged_seed1`) so far; the earlier
+chunk-size sweep hasn't been rerun with the corrected metric. See
+`results/whisper_streaming_investigation_2026-07-09.md` for the full writeup.
 
 Video does not currently help: audio-only configs beat their audio-visual counterparts
 across every architecture tested. See `results/week_results_2026-06-23_2026-07-01.md`

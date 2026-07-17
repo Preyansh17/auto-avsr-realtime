@@ -889,6 +889,62 @@ SpecAugment, `small`, merged domain, **34.08% test WER**.
 
 ---
 
+## Speech-anchored TTFT, beam search on streaming, and a Nemotron latency correction (2026-07-16/17)
+
+### Speech-anchored TTFT: how much of TTFT was just leading silence?
+
+TTFT as originally defined (`whisper_streaming_eval.py`/`nemotron_streaming_eval*.py`) measures from **stream start** (time 0 of the audio file), not from when the first word is actually spoken — the print output always carried an explicit "includes any leading silence before the first word" caveat, but the two numbers had never been separated. Added a second metric, `ttft_from_speech`, anchored to the first word's own spoken-end timestamp instead: `emit_sim - words[0]["end"]`. Reran the full 9-checkpoint `split_v1` 0.6s sweep (jobs 14027594 + 14029233, the latter after an OOM at the default 32GB job memory limit forced a rerun of `merged_seed2`/`seed3` at 64GB) to get real numbers:
+
+| Domain | Seed | Old TTFT p50 (stream-start) | New TTFT p50 (speech-anchored) | Silence contribution | Word-lag p50 |
+| --- | --- | --- | --- | --- | --- |
+| Legal | 1 | 1.97s | 1.95s | 0.02s | 1.63s |
+| Legal | 2 | 1.97s | 1.45s | 0.52s | 1.55s |
+| Legal | 3 | 1.97s | 1.59s | 0.38s | 1.59s |
+| Legacy | 1 | 2.59s | 1.69s | 0.90s | 1.71s |
+| Legacy | 2 | 2.59s | 1.81s | 0.78s | 1.68s |
+| Legacy | 3 | 1.99s | 1.53s | 0.46s | 1.59s |
+| Merged | 1 | 1.97s | 1.51s | 0.46s | 1.58s |
+| Merged | 2 | 1.97s | 1.95s | 0.02s | 1.64s |
+| Merged | 3 | 1.97s | 1.95s | 0.02s | 1.65s |
+
+Leading silence contributes anywhere from ~0s to ~0.9s of the old TTFT number depending on the specific clip mix each checkpoint's test set draws from -- not a fixed offset. Word-lag (already speech-anchored by construction, unaffected by this fix) stays the more meaningful number for "does this feel real-time"; the corrected TTFT is the more meaningful one for "how long after pressing record until anything shows up, accounting for the fact real speech doesn't start at frame 0."
+
+### Beam search on Whisper streaming: tested, closed, negative
+
+Tried `--beams 5` then `--beams 2` on SimulStreaming (`splitv1_merged_seed1`, 0.6s segments) to see whether beam search's offline WER wins for Nemotron (see the earlier week's §16 beam-decode section) would transfer to Whisper streaming. They don't:
+
+| | Greedy | Beam=2 | Beam=5 |
+| --- | --- | --- | --- |
+| Streaming WER | 17.49% | 31.39% | 28.70% |
+| RTF | ~0.30 | 0.334 | 0.361 |
+| TTFT p50 (stream-start) | ~1.97s | 1.98s | 1.99s |
+| Word-lag p50 | ~1.58s | 1.58s | 1.57s |
+
+Both beam widths roughly **double** WER relative to greedy, and latency barely moves either way — beam search isn't making SimulStreaming more hesitant to commit (the a priori hypothesis going in), it's making it **confidently commit to the wrong thing**. Inspecting the actual hypotheses: beam decoding introduces fluent-sounding hallucinated filler phrases Whisper is well known to produce on ambiguous/short audio ("Thank you.", "Thank you so much, thank you so much,", "Yes, yes we can confirm this", "well did you know") that greedy's narrow single-token-at-a-time behavior normally suppresses. Beam=2 is *slightly worse* than beam=5 here (31.39% vs 28.70%) — not a beam-width dial with a sweet spot, just two draws from the same hallucination-prone distribution. **Verdict: not worth pursuing at any width for this checkpoint/dataset.** No full 9-checkpoint sweep run given the smoke test already answers the question decisively.
+
+### Nemotron latency correction: the "comparable to or worse than Whisper" conclusion doesn't hold
+
+Nemotron's `nemotron_streaming_eval_latency.py` (built earlier this investigation) never had working word-level timestamps -- `compute_timestamps=True` crashed cache-aware streaming's carried decode state, so only stream-start-anchored TTFT was ever measured. A parallel session's later commit (`163d842`) added a `--word-lag` flag to the *original* `nemotron_streaming_eval.py`, with a different workaround (extract each step's new words from the dict-shaped `hyp.timestamp`, then restore it to a list before the next chunk's carried-state merge runs) -- written but never actually executed. Ran it for the first time (job 14072020, `nemotron_fullft_3way_{legal_seed3,merged_seed1}`), after adding the same `ttft_from_speech` fix used for Whisper above:
+
+| Checkpoint | WER (sanity-check vs. earlier script) | RTF | Old TTFT p50 | **New TTFT p50** | **Word-lag p50** |
+| --- | --- | --- | --- | --- | --- |
+| legal_seed3 | 33.33% (matches exactly) | 0.028 | 2.28s | **1.01s** | **0.86s** |
+| merged_seed1 | 32.16% (matches exactly) | 0.022 | 3.49s | **1.10s** | **0.99s** |
+
+WER matches the earlier script exactly on both checkpoints -- both eval implementations agree on the underlying decode, giving confidence in the new numbers. **Nemotron's leading-silence contamination in the old TTFT metric was far larger than Whisper's** (1.2-2.4s here vs. 0-0.9s for Whisper above) -- Nemotron's clips apparently have more silence padding, or its RNNT decoder needs more buffered context before committing to anything at all regardless of when speech starts, inflating the old, uncorrected number disproportionately.
+
+**This overturns the earlier conclusion** (README, and this file's Nemotron chunk-size-sweep section): "Nemotron's TTFT (2.2-4.4s) is comparable to or worse than Whisper's, despite ~10x lower per-chunk compute." That comparison used the silence-contaminated metric on both sides, but Nemotron's contamination happened to be much larger, making it look latency-competitive with Whisper when it wasn't a fair comparison. Corrected (speech-anchored TTFT / word-lag), on these two checkpoints Nemotron is **faster** than Whisper's 0.6s numbers, not comparable-or-worse:
+
+| | Whisper (0.6s, split_v1 mean) | Nemotron |
+| --- | --- | --- |
+| Speech-anchored TTFT | ~1.7s | **~1.0-1.1s** |
+| Word-lag | ~1.6s | **~0.86-0.99s** |
+| RTF | ~0.30 | ~0.02-0.03 |
+
+Nemotron is both far cheaper to run **and** genuinely lower-latency once the metric is fixed -- the "architecturally-fixed chunk size dominates over compute speed" story from the earlier chunk-size-sweep section needs revisiting; it may have been an artifact of comparing against a mismeasured baseline rather than a real property of Nemotron's cache-aware streaming design. Not yet re-swept with the corrected metric (the earlier `att_context_size` sweep only has old-style TTFT); worth rerunning if this comparison needs to be trusted further.
+
+---
+
 ## Environmental hazards to know about
 
 - **`/home/pa2753` is at/near its inode quota** on the torch cluster — a `touch` failed even after freeing ~180 files. Not caused by this investigation specifically (pre-existing), but will block any future work that writes many small files there. Established mitigation pattern this whole project: keep envs, caches, and any file-heavy third-party code on `/scratch/pa2753/` instead of `/home/pa2753/`.

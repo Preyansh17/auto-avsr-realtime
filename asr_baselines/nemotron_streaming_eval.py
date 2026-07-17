@@ -124,8 +124,9 @@ def main():
     total_elapsed = 0.0
     total_chunks = 0
     device = next(model.parameters()).device
-    ttft_sims = []       # stream start -> first text visible
-    word_lags = []       # word finished being SPOKEN -> its text visible
+    ttft_sims = []             # stream start -> first text visible (includes leading silence)
+    ttft_from_speech_sims = []  # first word's own end-of-speech -> its text visible
+    word_lags = []             # word finished being SPOKEN -> its text visible
 
     for it in items:
         path = it["audio_filepath"]
@@ -191,6 +192,8 @@ def main():
                     if words and utt_ttft is None:
                         utt_ttft = emit_sim
                         ttft_sims.append(emit_sim)
+                        first_word_end_sec = float(words[0]["end_offset"]) * frame_to_sec
+                        ttft_from_speech_sims.append(emit_sim - first_word_end_sec)
                     for w in words[prev_word_count:]:
                         word_end_sec = float(w["end_offset"]) * frame_to_sec
                         word_lags.append(emit_sim - word_end_sec)
@@ -229,6 +232,12 @@ def main():
               f"mean {statistics.mean(ttft_sims):.2f}s  p50 {pctl(ttft_sims, .5):.2f}s  "
               f"p95 {pctl(ttft_sims, .95):.2f}s  (n={len(ttft_sims)}; includes any "
               f"leading silence before the first word)")
+    if ttft_from_speech_sims:
+        import statistics
+        print(f"TTFT from first word spoken (excludes leading silence): "
+              f"mean {statistics.mean(ttft_from_speech_sims):.2f}s  "
+              f"p50 {pctl(ttft_from_speech_sims, .5):.2f}s  "
+              f"p95 {pctl(ttft_from_speech_sims, .95):.2f}s  (n={len(ttft_from_speech_sims)})")
     if word_lags:
         import statistics
         print(f"word commit lag (word spoken -> text visible): "

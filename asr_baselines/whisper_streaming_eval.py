@@ -113,8 +113,9 @@ def main():
     # its text can appear no earlier than (k+1)*seg + compute(chunk k). Valid
     # while per-chunk compute < segment (RTF<1: previous chunk's compute
     # overlaps the next chunk's recording).
-    ttft_sims = []      # stream start -> first text visible
-    word_lags = []      # word finished being SPOKEN -> its text visible
+    ttft_sims = []           # stream start -> first text visible (includes leading silence)
+    ttft_from_speech_sims = []  # first word's own end-of-speech -> its text visible
+    word_lags = []           # word finished being SPOKEN -> its text visible (all words)
 
     for it in items:
         # Label CSV paths point at the lip-crop mp4s, which are VIDEO-ONLY;
@@ -143,10 +144,14 @@ def main():
                 pieces.append(out["text"])
                 emit_sim = audio_avail + compute  # earliest wall time (from stream
                 # start) this text could exist in a real-time deployment
+                words = out.get("words", [])
                 if utt_ttft is None:
                     utt_ttft = emit_sim
                     ttft_sims.append(emit_sim)
-                for w in out.get("words", []):
+                    if words:  # anchor to the first word's own spoken-end time,
+                        # not stream start -- excludes leading silence
+                        ttft_from_speech_sims.append(emit_sim - words[0]["end"])
+                for w in words:
                     word_lags.append(emit_sim - w["end"])
         total_elapsed += time.time() - t0
 
@@ -172,6 +177,12 @@ def main():
               f"mean {statistics.mean(ttft_sims):.2f}s  p50 {pctl(ttft_sims, .5):.2f}s  "
               f"p95 {pctl(ttft_sims, .95):.2f}s  (n={len(ttft_sims)}; includes any "
               f"leading silence before the first word)")
+    if ttft_from_speech_sims:
+        import statistics
+        print(f"TTFT from first word spoken (excludes leading silence): "
+              f"mean {statistics.mean(ttft_from_speech_sims):.2f}s  "
+              f"p50 {pctl(ttft_from_speech_sims, .5):.2f}s  "
+              f"p95 {pctl(ttft_from_speech_sims, .95):.2f}s  (n={len(ttft_from_speech_sims)})")
     if word_lags:
         import statistics
         print(f"word commit lag (word spoken -> text visible): "
