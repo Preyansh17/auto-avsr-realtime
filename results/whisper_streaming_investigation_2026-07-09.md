@@ -1026,6 +1026,18 @@ Stacked a learning-rate sweep on top of the confirmed warmup=25/wd=0.01 tune (`s
 | **1e-5 (current recipe)** | **7.62%** | **11.66%** |
 | 2e-5 | 11.21% | 20.18% |
 
+#### Epoch-count sweep: also closed negative, 30 epochs stays the recipe
+
+Same pattern, stacked on the confirmed warmup=25/wd=0.01/lr=1e-5 recipe (`slurm/whisper_epochsweep_finetune.sbatch`), merged domain, single-seed screen at 20 and 45 epochs against the existing 30-epoch result:
+
+| Epochs | Offline WER | Streaming WER |
+| --- | --- | --- |
+| 20 | 12.11% | 25.11% |
+| **30 (current recipe)** | **7.62%** | **11.66%** |
+| 45 | 8.97% | 16.14% |
+
+Both alternates clearly worse on both metrics -- 20 epochs (undertrained) is the worst by far, 45 epochs (overtrained) is closer but still meaningfully behind. Unlike Nemotron and the AV Emformer, which both showed a real non-monotonic peak-then-reverse pattern with room to improve past their old defaults, Whisper full-FT's 30 epochs (combined with the tuned warmup/weight-decay) already sits at or near the peak for this dataset size. **Epoch sweep closed, no further seeds run.**
+
 Both alternate LRs are clearly worse on both metrics -- not close enough to warrant a 3-seed confirmation. 1e-5 (inherited from the old LoRA recipe) turns out to already be a good choice for full-FT too, at least combined with the tuned warmup/weight-decay. **LR sweep closed, no further seeds run.**
 
 #### Same tune on legal and legacy: real but smaller, and not as clean
