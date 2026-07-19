@@ -1069,7 +1069,19 @@ Result, merged domain, seed1, `prob=0.5`:
 | **baseline (no truncation)** | **7.62%** | **11.66%** | 4.04pp |
 | buffer truncation p=0.5 | 9.87% | 14.35% | 4.48pp |
 
-**Both metrics got worse, and the gap did not close -- it widened slightly.** This is not the predicted "trades offline for streaming" outcome; the mechanism simply isn't paying off. The offline regression (7.62% -> 9.87%) is consistent with the model learning to stop early, but if that were buying real streaming robustness the streaming number should have improved, and it didn't. Best guess at why: on 314 clips, halving the effective supervision on full utterances costs more than the train/decode match gains -- every truncated example is a shorter target and a partly-silent input, so `p=0.5` throws away a lot of signal on an already tiny dataset. A gentler `p=0.3` was run to check whether this is a tuning problem or a dead mechanism.
+**Both metrics got worse, and the gap did not close -- it widened slightly.** This is not the predicted "trades offline for streaming" outcome; the mechanism simply isn't paying off. The offline regression (7.62% -> 9.87%) is consistent with the model learning to stop early, but if that were buying real streaming robustness the streaming number should have improved, and it didn't.
+
+`p=0.3` was run to separate "too aggressive" from "dead mechanism", and it settles the question:
+
+| | Offline WER | Streaming WER | gap |
+| --- | --- | --- | --- |
+| **baseline (no truncation)** | **7.62%** | **11.66%** | 4.04pp |
+| buffer truncation p=0.5 | 9.87% | 14.35% | 4.48pp |
+| buffer truncation p=0.3 | 7.62% (exactly baseline) | 13.45% | 5.83pp |
+
+**Dead mechanism, not a tuning problem.** At `p=0.3` the offline regression vanishes completely -- 7.62%, identical to baseline, so the aggression of `p=0.5` was real and the gentler setting does no damage to whole-utterance transcription. But streaming *still* doesn't improve (13.45%, worse than baseline's 11.66%). That combination is the informative part: if truncated examples were teaching genuine partial-buffer robustness, the setting that costs nothing offline is exactly where the streaming gain should show up. It doesn't. So the truncated examples aren't teaching streaming-useful behaviour at all -- they're just a weaker training signal. **Buffer truncation closed at every setting tried; no further variants worth running.**
+
+Worth noting what this rules out, because it sharpens where the streaming penalty actually comes from: the penalty is apparently *not* mainly the model being unfamiliar with partial-buffer inputs (which is what this trains away). The decode-knob sweep below finds most of it somewhere else entirely.
 
 ## Streaming-aware checkpoint selection: offline-val selection is NOT mispicking (2026-07-19)
 
@@ -1111,7 +1123,29 @@ Extended `--warmup-steps 25 --weight-decay 0.01` to legal and legacy (3 seeds ea
 
 ---
 
-## Environmental hazards to know about
+## Decode knobs re-swept on the tuned checkpoint: "0.6s is the sweet spot" no longer holds (2026-07-19)
+
+The segment-length and `frame_threshold` conclusions in this file ("0.6s + ft=25 is optimal", "~1.4-1.6s word lag is a structural floor") were measured on the **old pre-tune checkpoints**. The recipe has changed a lot since (warmup/weight-decay cut merged streaming WER 17.04% -> 11.96%), and a different model can want a different decode policy, so the conclusion was worth re-testing rather than inheriting. `slurm/whisper_decode_sweep.sbatch`, 3x3 grid on the tuned `merged_wdwarmup_seed1` checkpoint, same held-out test40 -- decode-only, no retraining:
+
+| segment | frame_threshold | Streaming WER | TTFT-from-speech p50 | word-lag p50 | RTF |
+| --- | --- | --- | --- | --- | --- |
+| 0.3s | 12 | 17.04% | 1.25s | 1.25s | 0.575 |
+| 0.3s | 18 | 13.00% | 1.33s | 1.33s | 0.554 |
+| 0.3s | 25 | 12.11% | 1.39s | 1.46s | 0.553 |
+| 0.6s | 12 | 14.80% | 1.39s | 1.45s | 0.301 |
+| 0.6s | 18 | 12.56% | 1.49s | 1.51s | 0.298 |
+| **0.6s | 25 (old operating point)** | **11.66%** | **1.51s** | **1.60s** | 0.300 |
+| 1.2s | 12 | 13.00% | 1.94s | 1.74s | 0.170 |
+| **1.2s | 18 (new best WER)** | **8.97%** | **2.01s** | **1.81s** | **0.170** |
+| 1.2s | 25 | 8.97% | 2.06s | 1.87s | 0.171 |
+
+**The old conclusion does not survive the recipe change.** On the tuned checkpoint, 1.2s segments beat 0.6s by **2.69pp** (11.66% -> 8.97%) *and* cost roughly half the compute (RTF 0.300 -> 0.170, since a longer segment means far fewer forward passes over the growing buffer). The cost is latency: TTFT p50 2.01s vs 1.51s, word-lag p50 1.81s vs 1.60s. `ft=18` weakly dominates `ft=25` at 1.2s -- identical WER, slightly lower latency on both measures -- so 18 is the better of the two.
+
+The Pareto frontier on this checkpoint is: **0.3s/ft=25** (12.11% @ TTFT 1.39s) for latency-sensitive use, **0.6s/ft=25** (11.66% @ 1.51s), and **1.2s/ft=18** (8.97% @ 2.01s) for accuracy-first use. Several previously-plausible points are strictly dominated -- notably 0.6s/ft=18 (12.56% @ 1.49s) is beaten by 0.3s/ft=25 on *both* axes.
+
+**The bigger implication is about the streaming penalty itself.** At the new best decode point, streaming WER is 8.97% against the same checkpoint's offline 7.62% -- a gap of just **1.35pp**, versus the 4.04pp measured at 0.6s/ft=25. So most of what this investigation has been calling "the streaming penalty" was a decode-configuration artifact on the tuned model, not an intrinsic cost of streaming. That also explains why train-time buffer truncation (above) failed: it was attacking a train/decode input mismatch that turns out to be a minor part of the penalty, while the dominant part was simply decoding with too short a buffer. Latency, not accuracy, is what streaming genuinely costs here.
+
+Caveat: single checkpoint (seed1). A 3-seed confirmation at 1.2s/ft=18 vs 0.6s/ft=25 is running, since single-seed compares on this 40-clip test set have reversed before (see speed perturbation above).
 
 - **`/home/pa2753` is at/near its inode quota** on the torch cluster — a `touch` failed even after freeing ~180 files. Not caused by this investigation specifically (pre-existing), but will block any future work that writes many small files there. Established mitigation pattern this whole project: keep envs, caches, and any file-heavy third-party code on `/scratch/pa2753/` instead of `/home/pa2753/`.
 - **`/scratch/pa2753` can silently accumulate huge disk-quota debt from old full-FT `checkpoint-*` scratch.** Each full-FT large-v3 checkpoint (`save_total_limit=3`, includes full optimizer state) is ~18GB; across ~30 old, pre-`split_v1` experiment dirs this reached ~1.9TB before it caused two training jobs to die silently (no traceback) mid-checkpoint-save. A `dd`-based write test is the reliable way to confirm quota-exceeded vs. a real bug when a training job dies with no clear error. Safe cleanup: delete `checkpoint-*` subdirs only, never `best/` or `val_hyps.tsv` -- the final model and its eval results are already extracted and don't need the rolling optimizer-state snapshots.
