@@ -1016,6 +1016,24 @@ Two training hyperparameters were inherited from the original LoRA recipe and ne
 
 Hit a real disk-quota wall confirming this: `/scratch/pa2753` had accumulated ~1.9TB in `experiments/whisper_asr/`, almost entirely rolling `checkpoint-*` optimizer-state snapshots (18GB each, `save_total_limit=3`) from old, pre-`split_v1` runs already superseded by their extracted `best/` checkpoints. Two of the three wdwarmup seeds failed silently mid-checkpoint-save (model shards + `optimizer.pt` wrote fully, but the smaller `trainer_state.json`/`scheduler.pt` written right after did not -- no Python traceback, just a dead process, since the quota cutoff killed the write outside any try/except). Confirmed via a direct `dd` write test (`Disk quota exceeded` on a 100MB file) rather than trusting the ambiguous exit codes. Fix: delete `checkpoint-*` subdirectories (not `best/`, not `val_hyps.tsv`) from old superseded experiment dirs -- frees the space without losing any final result.
 
+#### Same tune on legal and legacy: real but smaller, and not as clean
+
+Extended `--warmup-steps 25 --weight-decay 0.01` to legal and legacy (3 seeds each, same `slurm/whisper_wdwarmup_finetune.sbatch`, now parameterized by `DOMAIN`):
+
+| Domain | Offline WER (seed1/2/3) | Offline mean | Streaming WER (seed1/2/3) | Streaming mean |
+| --- | --- | --- | --- | --- |
+| Legal (tuned) | 8.20% / 7.10% / 3.83% | **6.38%** | 13.11% / 10.38% / 11.48% | **11.66%** |
+| *(legal baseline)* | *6.56% / 7.65% / 8.74%* | *7.65%* | *14.75% / 16.94% / 11.48%* | *14.39%* |
+| Legacy (tuned) | 25.00% / 17.50% / 22.50% | **21.67%** | 32.50% / 35.00% / 30.00% | **32.50%** |
+| *(legacy baseline)* | *40.00% / 17.50% / 25.00%* | *27.5%* | *32.50% / 22.50% / 50.00%* | *35.0%* |
+
+**Both domains improve on mean, but neither reproduces merged's clean every-seed win:**
+
+- **Legal**: streaming mean improves 2.73pp (14.39%→11.66%), but only 1 of 3 tuned seeds actually beats the baseline's best individual seed (11.48%) -- seed2 (10.38%) does, seed3 (11.48%) ties it exactly, seed1 (13.11%) is worse than baseline's best. A real but modest improvement, not the unambiguous win merged showed.
+- **Legacy**: streaming mean improves 2.5pp (35.0%→32.5%), and variance collapses hard -- baseline's wild 27.5pp range (22.5-50.0%) shrinks to 5pp (30.0-35.0%) under the tune. But **no tuned seed beats baseline's best individual seed (22.50%)** -- the tune trades away legacy's occasional lucky-seed outcome for a much more reliable, but not better-at-best, result. Consistent with legacy's known extreme small-test-set variance (10 clips) -- see the seed-flip finding earlier in this file and [[patient-avsr-wer-variance]].
+
+**Verdict: the warmup/weight-decay tune is a real, positive lever on all three domains, but its size and cleanliness scales with how much training data the domain has** -- merged (314 train clips) gets a large, unambiguous win; legal (238 clips) gets a smaller, mostly-positive-but-mixed one; legacy (76 clips) gets mean improvement + variance reduction but not a best-case win. Worth keeping as the new default recipe going forward given it never makes things worse on mean, but legacy's number should still be read with its usual wide-error-bars caveat.
+
 ---
 
 ## Environmental hazards to know about

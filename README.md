@@ -77,18 +77,19 @@ legacy +7.5pp, merged +8.8pp mean-to-mean) — in the same range as the original
 legal-only/merged streaming penalty found earlier. Full writeup, including two real bugs
 hit and fixed along the way (a token-vocabulary mismatch that looked like a queue problem,
 and a red-herring SLURM error message), in
-
-### New best, merged streaming: warmup/weight-decay tune (2026-07-18)
-
-**Confirmed new best merged streaming WER: 11.96% mean (8.07-16.14%, 3 seeds), down from 17.04%.** Only the training hyperparameters changed — same large-v3 full-FT + SpecAugment recipe, `--warmup-steps 25` (was 100, inherited from an old LoRA recipe and disproportionate for this run's ~600 total steps) and `--weight-decay 0.01` (was 0.0):
-
-| | Offline WER (seed1/2/3) | Offline mean | Streaming WER (seed1/2/3, 0.6s) | Streaming mean |
-| --- | --- | --- | --- | --- |
-| Baseline (warmup=100, wd=0.0) | 9.87% / 7.62% / 7.17% | 8.22% | 17.49% / 17.49% / 16.14% | 17.04% |
-| **Tuned (warmup=25, wd=0.01)** | 7.62% / 6.28% / 8.97% | **7.62%** | 11.66% / 8.07% / 16.14% | **11.96%** |
-
-Every one of the 3 tuned seeds matches or beats the baseline's *best* seed (16.14%) on streaming WER — this isn't one lucky seed, it holds across all 3, unlike two other levers tried the same week (checkpoint soup: no win, landed at the baseline mean; speed perturbation: looked like a win on seed1 alone, reversed to a loss across 3 seeds — see `results/whisper_streaming_investigation_2026-07-09.md`). Latency unaffected. This is now the leaderboard number for merged-domain streaming.
 `results/whisper_streaming_investigation_2026-07-09.md`.
+
+### New best streaming numbers: warmup/weight-decay tune (2026-07-18)
+
+Two training hyperparameters (`--warmup-steps`, `--weight-decay`) were inherited from an old LoRA recipe and never revisited for full-FT. Tried `--warmup-steps 25 --weight-decay 0.01` (was 100 / 0.0) on all three domains, 3 seeds each, same large-v3 full-FT + SpecAugment recipe otherwise:
+
+| Domain | Offline mean (tuned vs baseline) | Streaming mean (tuned vs baseline) |
+| --- | --- | --- |
+| **Merged** | **7.62%** vs 8.22% | **11.96%** vs 17.04% |
+| Legal | 6.38% vs 7.65% | 11.66% vs 14.39% |
+| Legacy | 21.67% vs 27.5% | 32.50% vs 35.0% |
+
+**Merged is a clean win** — every one of its 3 tuned seeds matches or beats the baseline's best seed (16.14%), not just one lucky seed (unlike two other levers tried the same week: checkpoint soup, no win; speed perturbation, looked like a win on 1 seed, reversed on 3 — see the investigation doc). **Legal and legacy improve on mean but less cleanly** — legal has only 1 of 3 tuned seeds beating baseline's best; legacy's mean improves and its wild seed variance collapses (27.5pp range → 5pp) but no tuned seed beats baseline's lucky-best individual seed (22.50%, itself a known outlier on a 10-clip test set). Net: worth keeping as the new default recipe (never worse on mean, often much better), but only merged should be quoted as an unambiguous win. Latency unaffected on all three. Full tables and per-seed breakdown in `results/whisper_streaming_investigation_2026-07-09.md`.
 | Whisper medium + SpecAugment, full finetune | offline | 9.8% | 2.6% |
 | AV Emformer, audio-only, LoRA (streaming-selected) | streaming | 26.8% | — |
 | Nemotron, full finetune (30 epochs, untuned default), cache-aware streaming decode | streaming | 33.3% | 32.2% |
