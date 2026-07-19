@@ -90,6 +90,19 @@ Two training hyperparameters (`--warmup-steps`, `--weight-decay`) were inherited
 | Legacy | 21.67% vs 27.5% | 32.50% vs 35.0% |
 
 **Merged is a clean win** — every one of its 3 tuned seeds matches or beats the baseline's best seed (16.14%), not just one lucky seed (unlike two other levers tried the same week: checkpoint soup, no win; speed perturbation, looked like a win on 1 seed, reversed on 3 — see the investigation doc). **Legal and legacy improve on mean but less cleanly** — legal has only 1 of 3 tuned seeds beating baseline's best; legacy's mean improves and its wild seed variance collapses (27.5pp range → 5pp) but no tuned seed beats baseline's lucky-best individual seed (22.50%, itself a known outlier on a 10-clip test set). Net: worth keeping as the new default recipe (never worse on mean, often much better), but only merged should be quoted as an unambiguous win. Latency unaffected on all three. Full tables and per-seed breakdown in `results/whisper_streaming_investigation_2026-07-09.md`.
+
+### Merged streaming, better again for free: decode at 1.2s segments (2026-07-19)
+
+The "0.6s segments + `frame_threshold=25` is the sweet spot" conclusion was measured on the *old* pre-tune checkpoints and does not survive the recipe change. Re-swept on the tuned checkpoints (decode-only, **no retraining**):
+
+| Decode point | Merged streaming WER (3 seeds) | Spread | TTFT p50 | Word-lag p50 | RTF |
+| --- | --- | --- | --- | --- | --- |
+| 0.6s / ft=25 (old) | 11.96% (11.66 / 8.07 / 16.14) | 8.07pp | ~1.5s | ~1.6s | 0.300 |
+| **1.2s / ft=18 (new)** | **8.97%** (8.97 / 8.97 / 8.97) | **0.00pp** | ~2.0s | ~1.8s | **0.170** |
+
+Better WER, ~half the compute, and the seed variance vanishes entirely — but ~0.5s more time-to-first-text. **Treat it as a Pareto choice, not a strict upgrade:** 1.2s/ft=18 for accuracy-first use, 0.6s/ft=25 if half a second of latency matters more, and 0.3s/ft=25 (12.11% @ TTFT ~1.4s) if it matters a lot.
+
+Two things worth noting. First, at 1.2s the offline→streaming gap is only **1.35pp** (8.97% vs 7.62% offline), not the ~4pp assumed throughout this investigation — most of the "streaming penalty" was a decode-configuration artifact, and what streaming really costs here is latency, not accuracy. Second, the seed scatter that looked like training instability was largely the short buffer amplifying small model differences: given a 1.2s buffer all three checkpoints score identically.
 | Whisper medium + SpecAugment, full finetune | offline | 9.8% | 2.6% |
 | AV Emformer, audio-only, LoRA (streaming-selected) | streaming | 26.8% | — |
 | Nemotron, full finetune (30 epochs, untuned default), cache-aware streaming decode | streaming | 33.3% | 32.2% |

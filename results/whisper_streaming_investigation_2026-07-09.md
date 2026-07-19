@@ -1145,7 +1145,23 @@ The Pareto frontier on this checkpoint is: **0.3s/ft=25** (12.11% @ TTFT 1.39s) 
 
 **The bigger implication is about the streaming penalty itself.** At the new best decode point, streaming WER is 8.97% against the same checkpoint's offline 7.62% -- a gap of just **1.35pp**, versus the 4.04pp measured at 0.6s/ft=25. So most of what this investigation has been calling "the streaming penalty" was a decode-configuration artifact on the tuned model, not an intrinsic cost of streaming. That also explains why train-time buffer truncation (above) failed: it was attacking a train/decode input mismatch that turns out to be a minor part of the penalty, while the dominant part was simply decoding with too short a buffer. Latency, not accuracy, is what streaming genuinely costs here.
 
-Caveat: single checkpoint (seed1). A 3-seed confirmation at 1.2s/ft=18 vs 0.6s/ft=25 is running, since single-seed compares on this 40-clip test set have reversed before (see speed perturbation above).
+### 3-seed confirmation: it holds, and it also kills the seed variance
+
+Single-seed compares on this 40-clip test set have reversed before (speed perturbation above), so all three merged `wdwarmup` checkpoints were re-decoded at both points:
+
+| Seed | 1.2s / ft=18 | 0.6s / ft=25 |
+| --- | --- | --- |
+| 1 | 8.97% | 11.66% |
+| 2 | 8.97% | 8.07% |
+| 3 | 8.97% | 16.14% |
+| **mean** | **8.97%** | **11.96%** |
+| spread | **0.00pp** | 8.07pp |
+
+**Confirmed: 8.97% 3-seed mean, a 2.99pp improvement over the old operating point, from a decode-time flag change with no retraining.** The more striking half is the second column: at 1.2s every seed lands on exactly 8.97%, while at 0.6s the same three checkpoints scatter across 8.07-16.14%. (The seeds are not producing identical output -- their CERs differ, 5.38%/6.37%/6.57% -- they simply each make 20 word errors out of 223.)
+
+That reframes the seed-variance theme running through this whole investigation. A large part of what looked like training instability was the short-buffer decode amplifying small model differences into large WER differences: seed3 is not a "bad seed", it is a seed that degrades badly when decoded with too little context. Given a 1.2s buffer, all three checkpoints are equally good. **Reported spreads on this data are partly a property of the decode configuration, not just the training run** -- worth remembering before attributing future variance to seeds.
+
+Latency is the honest cost and it is unchanged by this confirmation: TTFT p50 ~2.0s vs ~1.5s, word-lag p50 ~1.8s vs ~1.6s. So this is a Pareto choice, not a strict upgrade -- 0.6s/ft=25 remains correct if half a second of TTFT matters more than 3pp of WER.
 
 - **`/home/pa2753` is at/near its inode quota** on the torch cluster — a `touch` failed even after freeing ~180 files. Not caused by this investigation specifically (pre-existing), but will block any future work that writes many small files there. Established mitigation pattern this whole project: keep envs, caches, and any file-heavy third-party code on `/scratch/pa2753/` instead of `/home/pa2753/`.
 - **`/scratch/pa2753` can silently accumulate huge disk-quota debt from old full-FT `checkpoint-*` scratch.** Each full-FT large-v3 checkpoint (`save_total_limit=3`, includes full optimizer state) is ~18GB; across ~30 old, pre-`split_v1` experiment dirs this reached ~1.9TB before it caused two training jobs to die silently (no traceback) mid-checkpoint-save. A `dd`-based write test is the reliable way to confirm quota-exceeded vs. a real bug when a training job dies with no clear error. Safe cleanup: delete `checkpoint-*` subdirs only, never `best/` or `val_hyps.tsv` -- the final model and its eval results are already extracted and don't need the rolling optimizer-state snapshots.
