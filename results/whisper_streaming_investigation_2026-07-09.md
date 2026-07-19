@@ -1038,6 +1038,22 @@ Same pattern, stacked on the confirmed warmup=25/wd=0.01/lr=1e-5 recipe (`slurm/
 
 Both alternates clearly worse on both metrics -- 20 epochs (undertrained) is the worst by far, 45 epochs (overtrained) is closer but still meaningfully behind. Unlike Nemotron and the AV Emformer, which both showed a real non-monotonic peak-then-reverse pattern with room to improve past their old defaults, Whisper full-FT's 30 epochs (combined with the tuned warmup/weight-decay) already sits at or near the peak for this dataset size. **Epoch sweep closed, no further seeds run.**
 
+#### SpecAugment strength sweep: closed negative too, mask-time-prob=0.5 stays the recipe
+
+Same pattern, stacked on the confirmed warmup=25/wd=0.01/lr=1e-5/epochs=30 recipe (`slurm/whisper_specaugsweep_finetune.sbatch`), merged domain, single-seed screen at `--mask-time-prob` 0.3 (weaker) and 0.7 (stronger) against the Green default of 0.5:
+
+| mask-time-prob | Offline WER | Streaming WER |
+| --- | --- | --- |
+| 0.3 (weaker) | 9.87% | 19.28% |
+| **0.5 (current recipe)** | **7.62%** | **11.66%** |
+| 0.7 (stronger) | 7.62% (tied) | 12.11% |
+
+0.3 is clearly worse on both metrics. 0.7 is the closest any alternate got in this whole sweep series -- it exactly ties the baseline on offline WER and comes within 0.45pp on streaming (12.11% vs 11.66%, roughly 1 word on a 40-clip test, inside the noise floor) -- but it doesn't actually beat the baseline, so no 3-seed confirmation is warranted. **SpecAugment strength sweep closed, 0.5 stays the recipe.**
+
+### Training-hyperparameter sweep series: summary
+
+Four levers tried on top of the base large-v3 full-FT + SpecAugment recipe, merged domain: warmup steps + weight decay (confirmed win, see above), learning rate (closed negative), epoch count (closed negative), SpecAugment strength (closed negative). **Warmup/weight-decay was the only real lever found** -- the recipe's other inherited-and-never-revisited hyperparameters (LR, epoch count, augmentation strength) all turn out to already be close to optimal for this dataset size once warmup/weight-decay is fixed. This closes the training-hyperparameter search for now; further gains likely need a different category of lever (more/better data, architecture changes, or streaming-specific training as discussed earlier in this file).
+
 Both alternate LRs are clearly worse on both metrics -- not close enough to warrant a 3-seed confirmation. 1e-5 (inherited from the old LoRA recipe) turns out to already be a good choice for full-FT too, at least combined with the tuned warmup/weight-decay. **LR sweep closed, no further seeds run.**
 
 #### Same tune on legal and legacy: real but smaller, and not as clean
