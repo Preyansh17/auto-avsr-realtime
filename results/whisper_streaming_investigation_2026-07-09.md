@@ -1069,7 +1069,25 @@ Result, merged domain, seed1, `prob=0.5`:
 | **baseline (no truncation)** | **7.62%** | **11.66%** | 4.04pp |
 | buffer truncation p=0.5 | 9.87% | 14.35% | 4.48pp |
 
-**Both metrics got worse, and the gap did not close -- it widened slightly.** This is not the predicted "trades offline for streaming" outcome; the mechanism simply isn't paying off. The offline regression (7.62% -> 9.87%) is consistent with the model learning to stop early, but if that were buying real streaming robustness the streaming number should have improved, and it didn't. Best guess at why: on 314 clips, halving the effective supervision on full utterances costs more than the train/decode match gains -- every truncated example is a shorter target and a partly-silent input, so `p=0.5` throws away a lot of signal on an already tiny dataset. A gentler `p=0.3` is running to check whether this is a tuning problem or a dead mechanism.
+**Both metrics got worse, and the gap did not close -- it widened slightly.** This is not the predicted "trades offline for streaming" outcome; the mechanism simply isn't paying off. The offline regression (7.62% -> 9.87%) is consistent with the model learning to stop early, but if that were buying real streaming robustness the streaming number should have improved, and it didn't. Best guess at why: on 314 clips, halving the effective supervision on full utterances costs more than the train/decode match gains -- every truncated example is a shorter target and a partly-silent input, so `p=0.5` throws away a lot of signal on an already tiny dataset. A gentler `p=0.3` was run to check whether this is a tuning problem or a dead mechanism.
+
+## Streaming-aware checkpoint selection: offline-val selection is NOT mispicking (2026-07-19)
+
+Every Whisper number in this investigation comes from a checkpoint selected on **offline** val WER (`metric_for_best_model="wer"`). Since offline and streaming WER are known not to rank checkpoints identically on this data -- the legacy-domain seed flip earlier in this file is the clearest case, where the best offline seed was the worst streaming seed -- offline-val selection was a plausible systematic mispick for the streaming deployment, and a free one to test (no retraining, just re-decode the checkpoints already on disk).
+
+`slurm/select_streaming_epoch_whisper.sbatch` (new; the existing `select_best_streaming_epoch.sbatch` is AV-Emformer-only -- Lightning `.ckpt` + LoRA merge + singularity + `eval.py`, none of which applies to the Whisper HF-Trainer pipeline). It bit-exact-converts every retained checkpoint of a run, streaming-decodes each against a freshly built **val** manifest to choose, and separately decodes each against the held-out **test** manifest so the chosen one's test number can be quoted. **Selection used val only; the test column is for reporting, not choosing.**
+
+On `whisper_largev3_specaug_splitv1_merged_wdwarmup_seed1` (20 steps/epoch, so checkpoint-220 ~ epoch 11):
+
+| Checkpoint | Streaming WER, val (selection) | Streaming WER, test (report) |
+| --- | --- | --- |
+| **checkpoint-220 (= `best/`)** | **15.18%** | **11.66%** |
+| checkpoint-580 | 21.43% | 14.35% |
+| checkpoint-600 | 21.43% | 14.35% |
+
+**The streaming-selected checkpoint is the same one offline-val already picked** -- `best/` is byte-identical in behaviour to checkpoint-220 (identical val and test numbers), and it wins on val outright, with the two late epochs a clear 6pp behind. So there is no mispick to exploit: offline-val selection is fine for this recipe, and the 11.66% baseline already reflects the best available choice. Closed negative; the planned follow-up (retraining with a larger `save_total_limit` to search a wider candidate pool) is **not** warranted, since the offline metric agreed with the streaming metric on the pool that exists.
+
+Caveat worth stating: `save_total_limit=3` means the pool was the top-3 *by offline val WER* to begin with, so this tests "does offline mispick among its own finalists", not "is there some far-off epoch both metrics miss". The result that the early epoch (11) beats the final epochs (29, 30) by 6pp on val streaming is itself consistent with the epoch-sweep finding above that this recipe peaks well before its last epoch.
 
 Both alternate LRs are clearly worse on both metrics -- not close enough to warrant a 3-seed confirmation. 1e-5 (inherited from the old LoRA recipe) turns out to already be a good choice for full-FT too, at least combined with the tuned warmup/weight-decay. **LR sweep closed, no further seeds run.**
 
