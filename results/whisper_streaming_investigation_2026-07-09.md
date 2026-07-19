@@ -1054,6 +1054,23 @@ Same pattern, stacked on the confirmed warmup=25/wd=0.01/lr=1e-5/epochs=30 recip
 
 Four levers tried on top of the base large-v3 full-FT + SpecAugment recipe, merged domain: warmup steps + weight decay (confirmed win, see above), learning rate (closed negative), epoch count (closed negative), SpecAugment strength (closed negative). **Warmup/weight-decay was the only real lever found** -- the recipe's other inherited-and-never-revisited hyperparameters (LR, epoch count, augmentation strength) all turn out to already be close to optimal for this dataset size once warmup/weight-decay is fixed. This closes the training-hyperparameter search for now; further gains likely need a different category of lever (more/better data, architecture changes, or streaming-specific training as discussed earlier in this file).
 
+## Train-time buffer truncation: the first lever aimed at the GAP, and it does not work (2026-07-19)
+
+Everything above moves offline and streaming WER together, so none of it touches the thing that actually matters for deployment: the ~4pp penalty streaming pays over offline on the *same* checkpoint (7.62% -> 11.66%). That penalty is a train/decode mismatch. Training only ever shows whole utterances; AlignAtt decodes from a growing partial buffer, committing words before the rest of the audio exists.
+
+Buffer truncation attacks that directly (implemented this session, commit `6df5876`): with probability `p` a training example is cut to a random prefix of its audio **and its target text is cut to the words that finished being spoken before the cut**, minus a margin mirroring AlignAtt's hold-back (`frame_threshold=25` x 0.02s = 0.5s). Cutting the target too is the whole point -- truncating audio while keeping the full target would train the model to hallucinate the unheard tail, which is the exact failure streaming already suffers. That requires forced alignments, so `--aligned-csv` indexes the MFA TextGrids already produced for the CarelessWhisper pipeline; they cover this split **314/314** with zero word-sequence mismatches (verified before launch, and re-confirmed in the training log). Val stays whole-utterance so checkpoint selection is unchanged. New flags: `--aligned-csv`, `--buffer-truncation-prob`, `--min-prefix-sec`, `--prefix-margin-sec`; `slurm/whisper_buftrunc_finetune.sbatch`.
+
+Verified the truncation does what it claims before spending GPU time on it -- e.g. a 5.35s clip of `"i think you did it"` (word ends 0.9 / 1.32 / 2.46 / 2.97 / 3.19s) cut at 2.86s yields target `"i think"`, correct under the 0.5s margin.
+
+Result, merged domain, seed1, `prob=0.5`:
+
+| | Offline WER | Streaming WER | gap |
+| --- | --- | --- | --- |
+| **baseline (no truncation)** | **7.62%** | **11.66%** | 4.04pp |
+| buffer truncation p=0.5 | 9.87% | 14.35% | 4.48pp |
+
+**Both metrics got worse, and the gap did not close -- it widened slightly.** This is not the predicted "trades offline for streaming" outcome; the mechanism simply isn't paying off. The offline regression (7.62% -> 9.87%) is consistent with the model learning to stop early, but if that were buying real streaming robustness the streaming number should have improved, and it didn't. Best guess at why: on 314 clips, halving the effective supervision on full utterances costs more than the train/decode match gains -- every truncated example is a shorter target and a partly-silent input, so `p=0.5` throws away a lot of signal on an already tiny dataset. A gentler `p=0.3` is running to check whether this is a tuning problem or a dead mechanism.
+
 Both alternate LRs are clearly worse on both metrics -- not close enough to warrant a 3-seed confirmation. 1e-5 (inherited from the old LoRA recipe) turns out to already be a good choice for full-FT too, at least combined with the tuned warmup/weight-decay. **LR sweep closed, no further seeds run.**
 
 #### Same tune on legal and legacy: real but smaller, and not as clean
