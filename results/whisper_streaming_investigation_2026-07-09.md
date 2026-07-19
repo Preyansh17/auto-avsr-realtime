@@ -1016,6 +1016,18 @@ Two training hyperparameters were inherited from the original LoRA recipe and ne
 
 Hit a real disk-quota wall confirming this: `/scratch/pa2753` had accumulated ~1.9TB in `experiments/whisper_asr/`, almost entirely rolling `checkpoint-*` optimizer-state snapshots (18GB each, `save_total_limit=3`) from old, pre-`split_v1` runs already superseded by their extracted `best/` checkpoints. Two of the three wdwarmup seeds failed silently mid-checkpoint-save (model shards + `optimizer.pt` wrote fully, but the smaller `trainer_state.json`/`scheduler.pt` written right after did not -- no Python traceback, just a dead process, since the quota cutoff killed the write outside any try/except). Confirmed via a direct `dd` write test (`Disk quota exceeded` on a 100MB file) rather than trusting the ambiguous exit codes. Fix: delete `checkpoint-*` subdirectories (not `best/`, not `val_hyps.tsv`) from old superseded experiment dirs -- frees the space without losing any final result.
 
+#### LR sweep: closed negative, 1e-5 stays the recipe
+
+Stacked a learning-rate sweep on top of the confirmed warmup=25/wd=0.01 tune (`slurm/whisper_lrsweep_finetune.sbatch`), merged domain, single-seed screen at 5e-6 and 2e-5 against the existing 1e-5 result:
+
+| LR | Offline WER | Streaming WER |
+| --- | --- | --- |
+| 5e-6 | 10.76% | 22.42% |
+| **1e-5 (current recipe)** | **7.62%** | **11.66%** |
+| 2e-5 | 11.21% | 20.18% |
+
+Both alternate LRs are clearly worse on both metrics -- not close enough to warrant a 3-seed confirmation. 1e-5 (inherited from the old LoRA recipe) turns out to already be a good choice for full-FT too, at least combined with the tuned warmup/weight-decay. **LR sweep closed, no further seeds run.**
+
 #### Same tune on legal and legacy: real but smaller, and not as clean
 
 Extended `--warmup-steps 25 --weight-decay 0.01` to legal and legacy (3 seeds each, same `slurm/whisper_wdwarmup_finetune.sbatch`, now parameterized by `DOMAIN`):
