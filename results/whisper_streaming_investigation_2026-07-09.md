@@ -1000,9 +1000,26 @@ Seed1 alone looked like a genuine win (14.80% vs baseline's 17.04% mean / 16.14%
 
 **This is the exact single-seed trap the project has hit before (see the legacy-domain seed-flip finding earlier in this file, and [[patient-avsr-wer-variance]]): a single promising seed is not evidence of a real effect on a dataset this small (314 train clips, 40 test clips).** Both soup and speed-perturb are now closed as negative results for Whisper streaming WER on merged domain. New scripts: `scripts/soup_checkpoints.py`, `scripts/convert_soup.py`, `slurm/soup_checkpoints.sbatch`, `slurm/convert_soup.sbatch`, `slurm/whisper_speedperturb_finetune.sbatch` (parameterized by `SEED`), plus the `--speed-perturb`/`speed_perturb()` addition to `asr_baselines/whisper_finetune.py`.
 
+### Warmup steps + weight decay: a genuine, confirmed win (2026-07-18)
+
+Two training hyperparameters were inherited from the original LoRA recipe and never revisited for full-FT: `--warmup-steps 100` (this run has only ~600 total optimizer steps -- 314 train clips, batch=8×grad_accum=2, 30 epochs -- so 100 steps of pure warmup is ~17% of the whole run, disproportionate) and `--weight-decay 0.0` (despite a documented near-zero-train-loss-by-epoch-10 overfitting signature on this exact recipe). Tried `--warmup-steps 25 --weight-decay 0.01` together, merged domain, all 3 seeds (`slurm/whisper_wdwarmup_finetune.sbatch`):
+
+| Seed | Offline WER | Streaming WER |
+| --- | --- | --- |
+| 1 | 7.62% | 11.66% |
+| 2 | 6.28% | 8.07% |
+| 3 | 8.97% | 16.14% |
+| **mean** | **7.62%** | **11.96%** |
+| *(baseline mean)* | *8.22%* | *17.04%* |
+
+**Unlike speed-perturb, this holds up across all 3 seeds -- every one of them matches or beats the baseline's best individual seed (16.14%).** Streaming mean drops 5.08pp (17.04%→11.96%), offline mean drops 0.60pp (8.22%→7.62%), both moving the same direction (unlike speed-perturb, where offline and streaming diverged). The per-seed spread is wide (8.07-16.14%, 8.07pp range -- wider than baseline's 1.35pp) but, critically, it's a wide range that's *entirely above* the baseline mean's floor, not a range straddling it the way speed-perturb's was. Latency unaffected (TTFT/word-lag flat vs baseline). **New best confirmed result for Whisper merged-domain streaming WER, promoted to `README.md`'s leaderboard.**
+
+Hit a real disk-quota wall confirming this: `/scratch/pa2753` had accumulated ~1.9TB in `experiments/whisper_asr/`, almost entirely rolling `checkpoint-*` optimizer-state snapshots (18GB each, `save_total_limit=3`) from old, pre-`split_v1` runs already superseded by their extracted `best/` checkpoints. Two of the three wdwarmup seeds failed silently mid-checkpoint-save (model shards + `optimizer.pt` wrote fully, but the smaller `trainer_state.json`/`scheduler.pt` written right after did not -- no Python traceback, just a dead process, since the quota cutoff killed the write outside any try/except). Confirmed via a direct `dd` write test (`Disk quota exceeded` on a 100MB file) rather than trusting the ambiguous exit codes. Fix: delete `checkpoint-*` subdirectories (not `best/`, not `val_hyps.tsv`) from old superseded experiment dirs -- frees the space without losing any final result.
+
 ---
 
 ## Environmental hazards to know about
 
 - **`/home/pa2753` is at/near its inode quota** on the torch cluster — a `touch` failed even after freeing ~180 files. Not caused by this investigation specifically (pre-existing), but will block any future work that writes many small files there. Established mitigation pattern this whole project: keep envs, caches, and any file-heavy third-party code on `/scratch/pa2753/` instead of `/home/pa2753/`.
+- **`/scratch/pa2753` can silently accumulate huge disk-quota debt from old full-FT `checkpoint-*` scratch.** Each full-FT large-v3 checkpoint (`save_total_limit=3`, includes full optimizer state) is ~18GB; across ~30 old, pre-`split_v1` experiment dirs this reached ~1.9TB before it caused two training jobs to die silently (no traceback) mid-checkpoint-save. A `dd`-based write test is the reliable way to confirm quota-exceeded vs. a real bug when a training job dies with no clear error. Safe cleanup: delete `checkpoint-*` subdirs only, never `best/` or `val_hyps.tsv` -- the final model and its eval results are already extracted and don't need the rolling optimizer-state snapshots.
 - SSH to the cluster (`ssh torch`) needs periodic manual re-authentication when the control-master socket expires — shows up as `Permission denied (gssapi-keyex,...)` and needs the user to run `ssh torch` interactively once to restore it. Also occasionally needs the NYU VPN reconnected (internal `10.x.x.x` addresses aren't reachable without it — distinguishable from a real outage by testing a generic external host like `github.com`, which will succeed while `torch` still fails).
