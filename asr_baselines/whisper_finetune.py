@@ -24,6 +24,7 @@ Example:
 
 import argparse
 import os
+import random
 import sys
 
 import torch
@@ -77,6 +78,24 @@ def parse_args():
     p.add_argument("--speed-perturb", action="store_true",
                    help="3x train data via Kaldi-style speed perturbation (0.9x/1.0x/1.1x). "
                         "Train split only -- val/test stay unaugmented.")
+    # Train-time buffer truncation: simulate the partial audio buffer that
+    # AlignAtt/SimulStreaming shows the model at decode time, so it learns to
+    # transcribe exactly what is audible and stop -- instead of only ever
+    # seeing whole utterances at train time. Needs forced alignments to cut
+    # the TARGET text at the same point as the audio (see --aligned-csv);
+    # truncating audio while keeping the full target would teach hallucination.
+    p.add_argument("--aligned-csv", default=None,
+                   help="CarelessWhisper joined CSV (wav_path\\ttg_path\\traw_text) supplying "
+                        "MFA word alignments for the TRAIN split. Required for "
+                        "--buffer-truncation-prob.")
+    p.add_argument("--buffer-truncation-prob", type=float, default=0.0,
+                   help="per-example probability of training on a truncated prefix "
+                        "(0 = off). Train split only.")
+    p.add_argument("--min-prefix-sec", type=float, default=1.0,
+                   help="never cut the audio buffer shorter than this")
+    p.add_argument("--prefix-margin-sec", type=float, default=0.5,
+                   help="only keep words ending at least this long before the cut, mirroring "
+                        "AlignAtt's hold-back from the buffer end (frame_threshold=25 * 0.02s)")
     p.add_argument("--mask-time-prob", type=float, default=0.5)
     p.add_argument("--mask-time-length", type=int, default=40)
     p.add_argument("--mask-time-min-masks", type=int, default=2)
@@ -147,24 +166,57 @@ class WhisperPatientDataset(torch.utils.data.Dataset):
 
     speed_factors expands each example into len(speed_factors) copies, one per
     factor (e.g. [0.9, 1.0, 1.1] -> 3x the data). Only pass non-[1.0] factors
-    for the TRAIN split -- val/test must stay unaugmented."""
+    for the TRAIN split -- val/test must stay unaugmented.
 
-    def __init__(self, examples, processor, max_label_length, speed_factors=(1.0,)):
+    truncation_prob > 0 turns on train-time buffer truncation: with that
+    probability an example is cut to a random prefix of its audio, with the
+    target text cut to the words that finished being spoken before the cut
+    (needs example.words from a forced alignment). This matches what
+    AlignAtt/SimulStreaming feeds the model at decode time. Train split only."""
+
+    def __init__(self, examples, processor, max_label_length, speed_factors=(1.0,),
+                 truncation_prob=0.0, min_prefix_sec=1.0, prefix_margin_sec=0.5,
+                 truncation_seed=42):
         self.examples = examples
         self.processor = processor
         self.max_label_length = max_label_length
         self.speed_factors = list(speed_factors)
+        self.truncation_prob = truncation_prob
+        self.min_prefix_sec = min_prefix_sec
+        self.prefix_margin_sec = prefix_margin_sec
+        # Own RNG rather than the global one: seeded from --seed so runs stay
+        # reproducible, and forked dataloader workers each advance their own
+        # copy over the disjoint indices they're handed.
+        self._rng = random.Random(truncation_seed)
 
     def __len__(self):
         return len(self.examples) * len(self.speed_factors)
+
+    def _truncate(self, wav, ex):
+        """Cut audio to a random prefix and return the matching text prefix.
+        Returns (wav, text) unchanged when no valid truncation applies."""
+        words = ex.words
+        last_end = words[-1][1]
+        if last_end <= self.min_prefix_sec:
+            return wav, ex.text  # too short to cut meaningfully
+        cut = self._rng.uniform(self.min_prefix_sec, last_end)
+        keep = sum(1 for _, end in words if end <= cut - self.prefix_margin_sec)
+        if keep == 0 or keep == len(words):
+            # Nothing safely committable, or the cut keeps everything -- train
+            # this one whole rather than on an empty/duplicate target.
+            return wav, ex.text
+        return wav[: int(cut * 16000)], " ".join(w for w, _ in words[:keep])
 
     def __getitem__(self, idx):
         ex = self.examples[idx // len(self.speed_factors)]
         factor = self.speed_factors[idx % len(self.speed_factors)]
         wav = load_waveform(ex.path).numpy()
         wav = speed_perturb(wav, factor)
+        text = ex.text
+        if self.truncation_prob > 0.0 and ex.words and self._rng.random() < self.truncation_prob:
+            wav, text = self._truncate(wav, ex)
         feats = self.processor.feature_extractor(wav, sampling_rate=16000).input_features[0]
-        labels = self.processor.tokenizer(text=ex.text).input_ids[: self.max_label_length]
+        labels = self.processor.tokenizer(text=text).input_ids[: self.max_label_length]
         return {"input_features": feats, "labels": labels}
 
 
@@ -212,8 +264,12 @@ def main():
     configure_specaug(model, args)
     apply_freeze(model, args)
 
+    if args.buffer_truncation_prob > 0.0 and not args.aligned_csv:
+        raise SystemExit("--buffer-truncation-prob needs --aligned-csv (the target text must be "
+                         "cut at the same point as the audio; without alignments this would "
+                         "train the model to hallucinate the unheard tail)")
     train_ex = load_audio_examples(args.root_dir, args.train_file, args.sp_model_path,
-                                   max_frames=args.max_frames)
+                                   max_frames=args.max_frames, aligned_csv=args.aligned_csv)
     val_ex = load_audio_examples(args.root_dir, args.val_file, args.sp_model_path,
                                  max_frames=args.max_frames)
     print(f"train={len(train_ex)} val={len(val_ex)} examples")
@@ -221,8 +277,18 @@ def main():
     if args.speed_perturb:
         print(f"speed perturbation ON: train_ds expands {len(train_ex)} -> "
               f"{len(train_ex) * len(train_speed_factors)} examples ({train_speed_factors})")
+    if args.buffer_truncation_prob > 0.0:
+        aligned = sum(1 for e in train_ex if e.words)
+        print(f"buffer truncation ON: prob={args.buffer_truncation_prob} "
+              f"min_prefix={args.min_prefix_sec}s margin={args.prefix_margin_sec}s "
+              f"({aligned}/{len(train_ex)} train examples have usable alignments)")
     train_ds = WhisperPatientDataset(train_ex, processor, args.max_label_length,
-                                     speed_factors=train_speed_factors)
+                                     speed_factors=train_speed_factors,
+                                     truncation_prob=args.buffer_truncation_prob,
+                                     min_prefix_sec=args.min_prefix_sec,
+                                     prefix_margin_sec=args.prefix_margin_sec,
+                                     truncation_seed=args.seed)
+    # val stays whole-utterance: checkpoint selection is on offline val WER
     val_ds = WhisperPatientDataset(val_ex, processor, args.max_label_length)
     collator = DataCollatorSpeechSeq2Seq(processor)
 
