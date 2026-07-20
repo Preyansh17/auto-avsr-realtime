@@ -17,8 +17,11 @@ set -euo pipefail
 # for a 30-epoch/314-clip run; weight-decay=0.0 was never revisited despite
 # a documented overfitting signature on this recipe).
 #
-# DOMAIN in {legal,legacy,merged}, SEED in {1,2,3} must be set by the caller:
+# DOMAIN in {legal,legacy,merged}, SEED in {1,2,3} must be set by the caller.
+# MODEL defaults to large-v3; set it to test whether the tune transfers to a
+# cheaper base (large-v3 is heavy for real-time deployment):
 #   DOMAIN=legal SEED=1 sbatch slurm/whisper_wdwarmup_finetune.sbatch
+#   DOMAIN=merged SEED=1 MODEL=openai/whisper-medium sbatch slurm/whisper_wdwarmup_finetune.sbatch
 
 export PROJECT_ROOT="${PROJECT_ROOT:-/home/${USER}/auto-avsr-realtime}"
 export WHISPER_ENV="${WHISPER_ENV:-/scratch/${USER}/envs/whisper_asr}"
@@ -43,7 +46,14 @@ done
 
 SP_MODEL="${SP_MODEL:-${PROJECT_ROOT}/spm/spm_unigram_1023.model}"
 EXP_DIR="${EXP_DIR:-/scratch/${USER}/experiments/whisper_asr}"
-EXP_NAME="whisper_largev3_specaug_splitv1_${DOMAIN}_wdwarmup_seed${SEED}"
+MODEL="${MODEL:-openai/whisper-large-v3}"
+# large-v3 keeps its historical exp-name prefix so existing paths//results
+# still resolve; any other base gets its own prefix.
+case "$MODEL" in
+  */whisper-large-v3) MODEL_TAG="largev3" ;;
+  *) MODEL_TAG="$(basename "$MODEL" | sed 's/^whisper-//')" ;;
+esac
+EXP_NAME="whisper_${MODEL_TAG}_specaug_splitv1_${DOMAIN}_wdwarmup_seed${SEED}"
 
 echo "Starting at $(date) on $(hostname): DOMAIN=${DOMAIN} SEED=${SEED} EXP_NAME=${EXP_NAME}"
 echo "TRAIN_FILE=${TRAIN_FILE} ($(wc -l < "$TRAIN_FILE") rows)"
@@ -54,7 +64,7 @@ cd "${PROJECT_ROOT}"
 export SEED
 
 "${WHISPER_PY}" -m asr_baselines.whisper_finetune \
-  --model openai/whisper-large-v3 \
+  --model "${MODEL}" \
   --root-dir "${ROOT_DIR}" \
   --train-file "${TRAIN_FILE}" \
   --val-file "${VAL_FILE}" \
