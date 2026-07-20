@@ -1,0 +1,116 @@
+# Whisper (openai/whisper-large-v3) best config found so far, on the audited
+# three-domain split (patient_legal298_legacy96_split_v1, split_audit.json,
+# seed=7). Trained per-domain (each domain has its own checkpoints -- unlike
+# the Nemotron recipe, which trains once on merged and evaluates cross-domain).
+# See results/whisper_streaming_investigation_2026-07-09.md for the full
+# investigation, including everything that was tried and closed negative.
+#
+# This file documents the recipe for humans; it is not consumed by
+# whisper_finetune.py directly (no YAML config loader exists -- everything is
+# CLI args / sbatch env vars). To actually reproduce, one command runs the
+# whole pipeline (train -> offline eval -> bit-exact convert -> streaming eval
+# at the best decode point):
+#
+#   DOMAIN=merged SEED=1 sbatch slurm/whisper_splitv1_best.sbatch
+
+data:
+  split: patient_legal298_legacy96_split_v1
+  root_dir: /scratch/th3482/LipVideoData/patient_legal298_legacy96_split_v1
+  domains: [merged, legal, legacy]   # trained separately, 3 seeds each
+  # merged 314/40/40, legal 238/30/30, legacy 76/10/10 (train/val/test)
+  #
+  # The split's own labels/{domain}/{train,val,test}.csv carry unigram5000
+  # token ids. They MUST be retokenized to the 1023-piece SPM vocab first
+  # (scripts/regenerate_patient_labels.py) or whisper_finetune.py dies with a
+  # sentencepiece "piece id is out of range" IndexError. The shapes are
+  # identical so the mismatch is invisible until it crashes.
+  labels_dir: /scratch/$USER/avsr_realtime/labels/splitv1/{domain}/{split}_spm1023.csv
+
+model:
+  base_checkpoint: openai/whisper-large-v3
+  finetune_mode: full          # --unfreeze-encoder-layers -1 --train-decoder
+
+optim:
+  learning_rate: 1e-5          # swept (5e-6 / 2e-5), both clearly worse -- 1e-5 confirmed
+  warmup_steps: 25             # WAS 100 (inherited from a LoRA recipe). This run is
+                               # only ~600 total steps, so 100 meant ~17% of training
+                               # spent ramping. One half of the main win.
+  weight_decay: 0.01           # WAS 0.0. Full-FT of 1.5B params on 314 clips overfits
+                               # hard (train loss ~0 by epoch 10). Other half of the win.
+  epochs: 30                   # swept (20 / 45), both worse -- 30 confirmed
+  batch_size: 8
+  grad_accum: 2                # effective batch 16 -> ~20 steps/epoch, ~600 total
+  precision: bf16
+
+augmentation:
+  specaugment: true
+  mask_time_prob: 0.5          # swept (0.3 / 0.7), neither better -- Green default confirmed
+  mask_time_length: 40
+  mask_feature_prob: 0.1
+  mask_feature_length: 13
+
+decode:
+  # SimulStreaming / AlignAtt. These are the single biggest free lever found:
+  # switching 0.6s/ft=25 -> 1.2s/ft=18 is worth ~3pp WER at ~half the compute,
+  # with NO retraining. The old "0.6s is the sweet spot" conclusion was measured
+  # on pre-tune checkpoints and did not survive the recipe change -- re-check
+  # decode config after any training change, it is nearly free.
+  recommended:
+    segment_length: 1.2
+    frame_threshold: 18
+  alternatives:                # full Pareto frontier, merged seed1
+    - {segment_length: 0.3, frame_threshold: 12, wer: 17.04%, ttft_p50: 1.25s}
+    - {segment_length: 0.3, frame_threshold: 25, wer: 12.11%, ttft_p50: 1.39s}
+    - {segment_length: 0.6, frame_threshold: 25, wer: 11.66%, ttft_p50: 1.51s}
+    - {segment_length: 1.2, frame_threshold: 18, wer: 8.97%,  ttft_p50: 2.01s}  # recommended
+    - {segment_length: 3.0, frame_threshold: 22, wer: 7.17%,  ttft_p50: 2.73s}  # see caveat
+  # 3.0s caveat: merged clips average ~5.1s, so at 3.0s a clip is ~2 chunks and
+  # the final pass sees the whole utterance -- that 7.17% is offline decoding in
+  # disguise (offline is 7.62%, i.e. within one word), not a streaming result.
+  # 1.8s is an unexplained dip (worse than BOTH neighbours across all ft values,
+  # single-seed) -- do not interpolate this curve.
+
+results:
+  # 3-seed means, held-out test sets, decode at 1.2s/ft=18 unless noted
+  merged:
+    offline_wer: 7.62%
+    streaming_wer: 8.97%       # per-seed 8.97 / 8.97 / 8.97 -- zero spread
+    ttft_from_speech_p50: ~2.0s
+    word_commit_lag_p50: ~1.8s
+    rtf: 0.170
+  legal:
+    offline_wer: 6.38%
+    streaming_wer: 10.02%      # per-seed 11.48 / 10.38 / 8.20
+  legacy:
+    offline_wer: 21.67%
+    streaming_wer: 30.00%      # per-seed 27.50 / 27.50 / 35.00 -- directional only
+  # Progression on merged streaming: 17.04% (pre-tune, 0.6s) -> 11.96%
+  # (warmup/wd tune, 0.6s) -> 8.97% (same checkpoints, 1.2s/ft=18 decode).
+
+confidence:
+  merged: high        # 40-clip test, zero seed spread at the recommended decode point
+  legal: medium       # 30-clip test; tune's win is partial (1 of 3 seeds beat baseline's best)
+  legacy: low         # 10-clip test == ~40 words, so ONE word is 2.5pp. Directional only;
+                      # one seed regressed at the recommended decode point.
+
+closed_negative:
+  # All tried on top of this recipe and documented in the investigation file.
+  # Listed so they are not silently re-attempted.
+  - "checkpoint soup (3-seed weight average): lands exactly at the seed mean, worse than best seed"
+  - "speed perturbation 0.9/1.0/1.1x: looked like a 2.24pp win on seed1, reversed to a loss across 3 seeds"
+  - "learning-rate sweep 5e-6 / 2e-5: both clearly worse on offline and streaming"
+  - "epoch sweep 20 / 45: both worse; 30 already at/near the peak"
+  - "SpecAugment strength 0.3 / 0.7: 0.7 ties offline but never beats 0.5 on streaming"
+  - "train-time buffer truncation (MFA-aligned prefix targets, p=0.5 and p=0.3): dead at both.
+     At p=0.3 the offline regression vanishes entirely yet streaming still does not improve --
+     the truncated examples are simply a weaker signal, not a streaming lesson."
+  - "streaming-aware checkpoint selection: streaming picks the same checkpoint offline-val does"
+
+known_gaps:
+  - "the 1.8s decode dip is unexplained and single-seed -- no mechanism identified"
+  - "legacy cannot resolve a 2-3pp effect at 10 clips; its numbers are directional only"
+  - "legal's warmup/wd win is partial (1 of 3 seeds beat baseline's best) -- more seeds would settle it"
+  - "whisper medium with this recipe is running but unconfirmed -- large-v3 is heavy for real-time deploy"
+  - "Nemotron has never been run on split_v1, so the Whisper-vs-Nemotron comparison is not apples-to-apples
+     (Nemotron's numbers are on patient_legal298_plus_patient_unseen_crops, a different data root)"
+  - "beam search is unusable in streaming: any beam >1 triggers Whisper's hallucination prior on partial buffers"
