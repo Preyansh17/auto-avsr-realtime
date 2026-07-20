@@ -1163,6 +1163,29 @@ That reframes the seed-variance theme running through this whole investigation. 
 
 Latency is the honest cost and it is unchanged by this confirmation: TTFT p50 ~2.0s vs ~1.5s, word-lag p50 ~1.8s vs ~1.6s. So this is a Pareto choice, not a strict upgrade -- 0.6s/ft=25 remains correct if half a second of TTFT matters more than 3pp of WER.
 
+### It generalizes to legal and legacy (3 seeds each)
+
+Both other domains' tuned checkpoints re-decoded at the same two points (`slurm/decode_newpoint_legal_legacy.sbatch`), again decode-only:
+
+| Domain | Seed | 1.2s / ft=18 | 0.6s / ft=25 |
+| --- | --- | --- | --- |
+| Legal | 1 | 11.48% | 13.11% |
+| Legal | 2 | 10.38% | 10.38% |
+| Legal | 3 | 8.20% | 11.48% |
+| **Legal mean** | | **10.02%** | **11.66%** |
+| Legacy | 1 | 27.50% | 32.50% |
+| Legacy | 2 | 27.50% | 35.00% |
+| Legacy | 3 | 35.00% | 30.00% |
+| **Legacy mean** | | **30.00%** | **32.50%** |
+
+**All three domains improve at the longer buffer** -- merged -2.99pp, legal -1.64pp, legacy -2.50pp -- and RTF roughly halves everywhere (legal 0.33 -> 0.19, legacy 0.31 -> 0.20). So the decode-point finding is a property of the recipe, not a quirk of the merged split.
+
+Strength of evidence differs sharply by domain, though:
+- **Legal (30-clip test, 183 words)**: clean. Two seeds improve, one ties exactly, none regress.
+- **Legacy (10-clip test, 40 words)**: directional only. The mean improves, but seed3 *regresses* (30.00% -> 35.00%). On 40 words one word is 2.5pp, so that regression is two words. Not evidence against the change, but not evidence for it either -- legacy simply cannot resolve a 2-3pp effect.
+
+The merged result (zero spread across seeds, 314 train clips, 40-clip test) remains the one to quote.
+
 - **`/home/pa2753` is at/near its inode quota** on the torch cluster — a `touch` failed even after freeing ~180 files. Not caused by this investigation specifically (pre-existing), but will block any future work that writes many small files there. Established mitigation pattern this whole project: keep envs, caches, and any file-heavy third-party code on `/scratch/pa2753/` instead of `/home/pa2753/`.
 - **`/scratch/pa2753` can silently accumulate huge disk-quota debt from old full-FT `checkpoint-*` scratch.** Each full-FT large-v3 checkpoint (`save_total_limit=3`, includes full optimizer state) is ~18GB; across ~30 old, pre-`split_v1` experiment dirs this reached ~1.9TB before it caused two training jobs to die silently (no traceback) mid-checkpoint-save. A `dd`-based write test is the reliable way to confirm quota-exceeded vs. a real bug when a training job dies with no clear error. Safe cleanup: delete `checkpoint-*` subdirs only, never `best/` or `val_hyps.tsv` -- the final model and its eval results are already extracted and don't need the rolling optimizer-state snapshots.
 - SSH to the cluster (`ssh torch`) needs periodic manual re-authentication when the control-master socket expires — shows up as `Permission denied (gssapi-keyex,...)` and needs the user to run `ssh torch` interactively once to restore it. Also occasionally needs the NYU VPN reconnected (internal `10.x.x.x` addresses aren't reachable without it — distinguishable from a real outage by testing a generic external host like `github.com`, which will succeed while `torch` still fails).

@@ -102,6 +102,16 @@ The "0.6s segments + `frame_threshold=25` is the sweet spot" conclusion was meas
 
 Better WER, ~half the compute, and the seed variance vanishes entirely — but ~0.5s more time-to-first-text. **Treat it as a Pareto choice, not a strict upgrade:** 1.2s/ft=18 for accuracy-first use, 0.6s/ft=25 if half a second of latency matters more, and 0.3s/ft=25 (12.11% @ TTFT ~1.4s) if it matters a lot.
 
+It generalizes to the other two domains (3 seeds each, decode-only), with RTF roughly halving everywhere:
+
+| Domain (test size) | Streaming @0.6s/ft=25 | Streaming @1.2s/ft=18 | Gain |
+| --- | --- | --- | --- |
+| Merged (40 clips) | 11.96% | **8.97%** | −2.99pp |
+| Legal (30 clips) | 11.66% | **10.02%** | −1.64pp |
+| Legacy (10 clips) | 32.50% | **30.00%** | −2.50pp |
+
+Legal is clean (2 of 3 seeds improve, 1 ties, none regress). Legacy is directional only — its 10-clip/40-word test set makes one word worth 2.5pp, and one seed regresses there. **Merged is the number to quote.**
+
 Two things worth noting. First, at 1.2s the offline→streaming gap is only **1.35pp** (8.97% vs 7.62% offline), not the ~4pp assumed throughout this investigation — most of the "streaming penalty" was a decode-configuration artifact, and what streaming really costs here is latency, not accuracy. Second, the seed scatter that looked like training instability was largely the short buffer amplifying small model differences: given a 1.2s buffer all three checkpoints score identically.
 | Whisper medium + SpecAugment, full finetune | offline | 9.8% | 2.6% |
 | AV Emformer, audio-only, LoRA (streaming-selected) | streaming | 26.8% | — |
