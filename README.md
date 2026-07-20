@@ -133,6 +133,21 @@ greedy decode; both beam algorithms tried (`maes`, `malsd_batch`) raise an expli
 disk-quota trap hit mid-sweep and its cleanup, in
 `results/week_results_2026-07-14_2026-07-17.md`.
 
+**Update (2026-07-19): the numbers above were on an ad-hoc split, never on the audited
+`split_v1` Whisper's own leaderboard uses — Nemotron had never been run on split_v1 at
+all before this.** Retrained the same recipe (merged, full-FT) on split_v1 and swept
+epochs further: 90→20.6%, 120→14.8%, 150→13.0%, **180→12.1% (best found, still improving,
+no plateau)** — median in-domain merged WER, 3 seeds each. **The "120 already reverses"
+claim above does not hold on split_v1** — epoch count's sweet spot turns out to be
+split-dependent, not a fixed recipe property. Cross-domain streaming (epochs=120, the
+most fully characterized checkpoint): legal 12.0%, legacy 20.0% — both with ~0.9-1.0s
+TTFT-from-speech and ~0.85-0.88s word-commit lag, matching the ad-hoc split's latency
+numbers almost exactly. Legacy itself is split-dependent too (13.5% ad-hoc vs 20.0%
+split_v1, same recipe) — unexplained. Epochs=180 has only its in-domain merged number
+confirmed so far; cross-domain/streaming/beam not yet rerun on it. Full writeup,
+including the exact best-config hyperparameters, in
+`results/nemotron_splitv1_epoch_sweep_2026-07-18.md`.
+
 Streaming latency, all measured via simulated real-time (chunk k's audio only
 exists at (k+1)*chunk_duration seconds, matching a live deployment):
 
