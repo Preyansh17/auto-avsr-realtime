@@ -1,0 +1,58 @@
+# Nemotron (nvidia/nemotron-speech-streaming-en-0.6b) best config found so far,
+# on the audited three-domain split (patient_legal298_legacy96_split_v1,
+# split_audit.json, seed=7). Trained once on `merged`; evaluated cross-domain
+# on legal and legacy without retraining. See
+# results/nemotron_splitv1_epoch_sweep_2026-07-18.md for the full writeup,
+# epoch sweep, and open items (epoch ceiling not found -- 180 was still
+# improving when the sweep stopped).
+#
+# This file documents the recipe for humans; it is not consumed by
+# nemotron_finetune.py directly (no YAML config loader exists for Nemotron in
+# this repo -- everything is CLI args / sbatch env vars). Use
+# slurm/nemotron_splitv1_best.sbatch to actually reproduce this run.
+
+data:
+  split: patient_legal298_legacy96_split_v1
+  domain_trained_on: merged      # train314 / val40 / test40
+  domains_evaluated: [merged, legal, legacy]  # legal/legacy are cross-domain, zero extra training
+  root_dir: /scratch/th3482/LipVideoData/patient_legal298_legacy96_split_v1
+  # Split's own label CSVs (labels/{domain}/{train,val,test}.csv) carry
+  # unigram5000 token ids -- retokenize to the 1023-piece SPM vocab first via
+  # scripts/regenerate_patient_labels.py before use.
+
+model:
+  base_checkpoint: nvidia/nemotron-speech-streaming-en-0.6b
+  finetune_mode: full            # unfreeze_encoder_layers=-1, train_decoder=1 (encoder+decoder+joint all trainable)
+
+optim:
+  learning_rate: 1e-4            # flat, single LR for the whole model -- no decoder/joint differential tried here
+  weight_decay: 1e-3             # script default, never swept on this split
+  warmup_steps: 200              # script default, never swept on this split
+  batch_size: 2
+  grad_accum: 2                  # effective batch 4
+  precision: bf16-mixed
+  epochs: 180                    # best found; sweep was 90/120/150/180, still improving at 180, no plateau
+
+augmentation:
+  specaugment: true               # default on; not ablated on this split
+
+results:
+  # offline greedy WER, 3-seed median, in-domain merged test set
+  merged_offline_wer: 12.11%
+  # streaming (greedy -- the only decode strategy that works in NeMo's
+  # cache-aware carried-state loop; beam is confirmed unimplemented there)
+  # numbers below are from the epochs=120 checkpoint, the most fully
+  # characterized one -- epochs=180 has only its in-domain merged number
+  # confirmed so far, cross-domain/streaming not yet rerun on it.
+  epochs_120_streaming:
+    merged_wer: 13.90%
+    legal_wer: 12.02%
+    legacy_wer: 20.00%
+    ttft_from_speech_seconds: ~0.9-1.0     # excludes leading silence
+    word_commit_lag_seconds: ~0.85-0.9
+
+known_gaps:
+  - "epochs=180 not yet cross-domain/streaming/beam tested (only in-domain merged confirmed)"
+  - "epoch ceiling not found -- 180 was still improving; higher counts untested"
+  - "a differential decoder/joint LR recipe (base ~2.5e-5, decoder/joint at x0.2, wd=0.01, ~70 epochs) was surfaced from outside this repo and never implemented/compared -- nemotron_finetune.py has no per-module LR support currently"
+  - "legacy WER is split-dependent: 13.5% on the older ad-hoc split vs 20.0% here, same recipe -- unexplained"
