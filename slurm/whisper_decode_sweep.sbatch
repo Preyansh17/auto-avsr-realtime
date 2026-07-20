@@ -21,8 +21,19 @@ set -euo pipefail
 #
 # Decode-only: no retraining, just the converted checkpoint re-decoded 9 ways.
 #
+# The grid is configurable so the search can be extended past its original
+# edge (the first sweep topped out at 1.2s, which turned out to be the
+# winner -- so the optimum may lie beyond it):
+#
 #   RUN=whisper_largev3_specaug_splitv1_merged_wdwarmup_seed1 \
 #     sbatch slurm/whisper_decode_sweep.sbatch
+#   SEGMENTS="1.8 2.4 3.0" FRAME_THRESHOLDS="14 18 22" \
+#     sbatch slurm/whisper_decode_sweep.sbatch
+#
+# Note the degenerate limit: merged clips average ~5.1s, so once the segment
+# approaches clip length the buffer is the whole utterance and this stops
+# being streaming at all -- WER should converge to the offline number while
+# TTFT converges to the clip duration.
 
 export TMPDIR=/scratch/pa2753/.tmp
 export HF_HOME=/scratch/pa2753/hf_cache
@@ -39,9 +50,12 @@ MANIFEST="$RUN_DIR/val_hyps.tsv"   # this run's held-out test set
 [[ -f "$CKPT" ]] || { echo "[FATAL] no $CKPT" >&2; exit 3; }
 [[ -s "$MANIFEST" ]] || { echo "[FATAL] no $MANIFEST" >&2; exit 3; }
 
+SEGMENTS="${SEGMENTS:-0.3 0.6 1.2}"
+FRAME_THRESHOLDS="${FRAME_THRESHOLDS:-12 18 25}"
+
 cd /scratch/pa2753/wse_pkg
-for SEG in 0.3 0.6 1.2; do
-  for FT in 12 18 25; do
+for SEG in $SEGMENTS; do
+  for FT in $FRAME_THRESHOLDS; do
     echo "########## segment=${SEG}s frame_threshold=${FT}"
     python -m asr_baselines.whisper_streaming_eval \
       --model-path "$CKPT" \

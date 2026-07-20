@@ -1186,6 +1186,32 @@ Strength of evidence differs sharply by domain, though:
 
 The merged result (zero spread across seeds, 314 train clips, 40-clip test) remains the one to quote.
 
+### Extending the grid past 1.2s: it was the edge of the search, so the search was extended
+
+1.2s was the largest segment in the original grid, and it won -- which is exactly the situation where the "optimum" can be an artifact of where the search stopped. Extended to segment {1.8, 2.4, 3.0} x ft {14, 18, 22} on the same merged seed1 checkpoint (`slurm/whisper_decode_sweep.sbatch`, now taking `SEGMENTS`/`FRAME_THRESHOLDS` env vars):
+
+| segment | ft | Streaming WER | TTFT p50 | word-lag p50 | RTF |
+| --- | --- | --- | --- | --- | --- |
+| *0.6 (ref)* | *25* | *11.66%* | *1.51s* | *1.60s* | *0.300* |
+| ***1.2 (ref)*** | ***18*** | ***8.97%*** | ***2.01s*** | ***1.81s*** | *0.170* |
+| 1.8 | 14 | 12.56% | 1.56s | 1.97s | 0.150 |
+| 1.8 | 18 | 11.66% | 1.74s | 2.06s | 0.144 |
+| 1.8 | 22 | 11.21% | 1.74s | 2.12s | 0.146 |
+| 2.4 | 14 | 8.97% | 2.11s | 2.02s | 0.124 |
+| 2.4 | 18 | 9.42% | 2.15s | 2.04s | 0.120 |
+| 2.4 | 22 | 9.42% | 2.11s | 2.08s | 0.121 |
+| 3.0 | 14 | 8.07% | 2.72s | 2.20s | 0.105 |
+| 3.0 | 18 | 8.07% | 2.72s | 2.23s | 0.110 |
+| 3.0 | 22 | **7.17%** | 2.73s | 2.31s | 0.114 |
+
+**1.2s/ft=18 survives as the best streaming operating point, but not because WER stops improving -- because everything past it is either dominated or no longer streaming.**
+
+- **2.4s is strictly dominated by 1.2s**: same 8.97% WER, but worse on both latency measures (TTFT 2.11s vs 2.01s, word-lag 2.02s vs 1.81s) -- you pay latency for nothing.
+- **3.0s reaches ~offline WER, which is the tell, not a triumph.** At 3.0s a 5.1s average clip is ~2 chunks, so the final decode pass sees the entire utterance: this is offline decoding with extra steps. Its 7.17% sits within one word (0.45pp) of the 7.62% offline number, exactly as the degeneracy prediction says it should. Quoting it as a streaming result would be misleading -- TTFT p50 is 2.73s on clips averaging 5.1s, i.e. you wait for over half the utterance before seeing anything.
+- **1.8s is an unexplained dip.** All three ft values agree it is *worse* than both its neighbours (11.21-12.56% vs 8.97% at 1.2s and 8.97-9.42% at 2.4s), so it isn't a single-run fluke, but the WER-vs-segment curve being non-monotonic here has no obvious mechanism. Single seed only -- worth a 3-seed check before treating the dip as real, and worth remembering as a caution against assuming these curves are smooth enough to interpolate.
+
+Net: the decode question is closed at **1.2s/ft=18** for streaming use, with **3.0s/ft=22** available as the "I want offline accuracy and don't really need streaming" corner. The Pareto frontier across the whole sweep is 0.3s/ft=12 (17.04% @ TTFT 1.25s), 0.3s/ft=25 (12.11% @ 1.39s), 0.6s/ft=25 (11.66% @ 1.51s), 1.2s/ft=18 (8.97% @ 2.01s), 3.0s/ft=22 (7.17% @ 2.73s).
+
 - **`/home/pa2753` is at/near its inode quota** on the torch cluster — a `touch` failed even after freeing ~180 files. Not caused by this investigation specifically (pre-existing), but will block any future work that writes many small files there. Established mitigation pattern this whole project: keep envs, caches, and any file-heavy third-party code on `/scratch/pa2753/` instead of `/home/pa2753/`.
 - **`/scratch/pa2753` can silently accumulate huge disk-quota debt from old full-FT `checkpoint-*` scratch.** Each full-FT large-v3 checkpoint (`save_total_limit=3`, includes full optimizer state) is ~18GB; across ~30 old, pre-`split_v1` experiment dirs this reached ~1.9TB before it caused two training jobs to die silently (no traceback) mid-checkpoint-save. A `dd`-based write test is the reliable way to confirm quota-exceeded vs. a real bug when a training job dies with no clear error. Safe cleanup: delete `checkpoint-*` subdirs only, never `best/` or `val_hyps.tsv` -- the final model and its eval results are already extracted and don't need the rolling optimizer-state snapshots.
 - SSH to the cluster (`ssh torch`) needs periodic manual re-authentication when the control-master socket expires — shows up as `Permission denied (gssapi-keyex,...)` and needs the user to run `ssh torch` interactively once to restore it. Also occasionally needs the NYU VPN reconnected (internal `10.x.x.x` addresses aren't reachable without it — distinguishable from a real outage by testing a generic external host like `github.com`, which will succeed while `torch` still fails).
