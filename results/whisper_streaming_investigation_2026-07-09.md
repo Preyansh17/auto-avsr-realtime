@@ -1208,7 +1208,19 @@ The merged result (zero spread across seeds, 314 train clips, 40-clip test) rema
 
 - **2.4s is strictly dominated by 1.2s**: same 8.97% WER, but worse on both latency measures (TTFT 2.11s vs 2.01s, word-lag 2.02s vs 1.81s) -- you pay latency for nothing.
 - **3.0s reaches ~offline WER, which is the tell, not a triumph.** At 3.0s a 5.1s average clip is ~2 chunks, so the final decode pass sees the entire utterance: this is offline decoding with extra steps. Its 7.17% sits within one word (0.45pp) of the 7.62% offline number, exactly as the degeneracy prediction says it should. Quoting it as a streaming result would be misleading -- TTFT p50 is 2.73s on clips averaging 5.1s, i.e. you wait for over half the utterance before seeing anything.
-- **1.8s is an unexplained dip.** All three ft values agree it is *worse* than both its neighbours (11.21-12.56% vs 8.97% at 1.2s and 8.97-9.42% at 2.4s), so it isn't a single-run fluke, but the WER-vs-segment curve being non-monotonic here has no obvious mechanism. Single seed only -- worth a 3-seed check before treating the dip as real, and worth remembering as a caution against assuming these curves are smooth enough to interpolate.
+- **1.8s looked like a dip on seed1, but a 3-seed check says otherwise -- and finds something better.** On seed1 alone, 1.8s was worse than both neighbours across all ft values, which read like a real non-monotonicity. Re-decoding all three merged checkpoints at 1.2/1.8/2.4s (ft=18) shows the "dip" is seed-dependent, not systematic:
+
+  | Seed | 1.2s | 1.8s | 2.4s |
+  | --- | --- | --- | --- |
+  | 1 | 8.97% | 11.66% | 9.42% |
+  | 2 | 8.97% | 6.73% | 5.38% |
+  | 3 | 8.97% | 12.11% | 11.21% |
+  | **mean** | **8.97%** | 10.17% | 8.67% |
+  | **spread** | **0.00pp** | 5.38pp | 5.83pp |
+
+  Seeds 1 and 3 dip at 1.8s; **seed2 does the exact opposite**, improving monotonically with segment length (8.97% -> 6.73% -> 5.38%). So the 1.8s dip is test-set noise, not a mechanism -- the earlier "not a single-run fluke" read was wrong, and is retracted here.
+
+  The genuine finding underneath it: **1.2s is a robustness singularity.** All three seeds collapse to exactly 8.97% there, and moving off it in *either* direction re-introduces a 5-6pp seed spread. 2.4s even has a marginally better 3-seed mean (8.67% vs 8.97%), but it is a coin-flip by seed (5.38-11.21%), whereas 1.2s is dead reliable. That is a stronger reason to hold 1.2s/ft=18 as the operating point than the dip ever was: it is the one segment length where the choice of seed stops mattering. It also sharpens the "don't interpolate these curves" caution -- the curves aren't just bumpy, they are only *tight* at 1.2s and become seed-noise-dominated on both sides.
 
 Net: the decode question is closed at **1.2s/ft=18** for streaming use, with **3.0s/ft=22** available as the "I want offline accuracy and don't really need streaming" corner. The Pareto frontier across the whole sweep is 0.3s/ft=12 (17.04% @ TTFT 1.25s), 0.3s/ft=25 (12.11% @ 1.39s), 0.6s/ft=25 (11.66% @ 1.51s), 1.2s/ft=18 (8.97% @ 2.01s), 3.0s/ft=22 (7.17% @ 2.73s).
 
