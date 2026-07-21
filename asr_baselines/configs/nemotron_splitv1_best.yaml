@@ -3,13 +3,15 @@
 # split_audit.json, seed=7). Trained once on `merged`; evaluated cross-domain
 # on legal and legacy without retraining. See
 # results/nemotron_splitv1_epoch_sweep_2026-07-18.md for the full writeup,
-# epoch sweep, and open items (epoch ceiling not found -- 180 was still
-# improving when the sweep stopped).
+# epoch sweep, and open items. Epoch ceiling: 210/240 did not beat 180 on
+# single-seed screens (240 additionally truncated by a cluster
+# auto-cancellation, see the writeup) -- 180 is the confirmed stopping point,
+# not 3-seed-verified past that.
 #
 # This file documents the recipe for humans; it is not consumed by
 # nemotron_finetune.py directly (no YAML config loader exists for Nemotron in
 # this repo -- everything is CLI args / sbatch env vars). Use
-# slurm/nemotron_splitv1_best.sbatch to actually reproduce this run.
+# slurm/nemotron_splitv1_best.sh to actually reproduce this run.
 
 data:
   split: patient_legal298_legacy96_split_v1
@@ -31,28 +33,23 @@ optim:
   batch_size: 2
   grad_accum: 2                  # effective batch 4
   precision: bf16-mixed
-  epochs: 180                    # best found; sweep was 90/120/150/180, still improving at 180, no plateau
+  epochs: 180                    # confirmed best; swept 90/120/150/180/210/240, 210/240 didn't beat it (see writeup)
 
 augmentation:
   specaugment: true               # default on; not ablated on this split
 
 results:
-  # offline greedy WER, 3-seed median, in-domain merged test set
-  merged_offline_wer: 12.11%
   # streaming (greedy -- the only decode strategy that works in NeMo's
-  # cache-aware carried-state loop; beam is confirmed unimplemented there)
-  # numbers below are from the epochs=120 checkpoint, the most fully
-  # characterized one -- epochs=180 has only its in-domain merged number
-  # confirmed so far, cross-domain/streaming not yet rerun on it.
-  epochs_120_streaming:
-    merged_wer: 13.90%
-    legal_wer: 12.02%
-    legacy_wer: 20.00%
+  # cache-aware carried-state loop; beam is confirmed unimplemented there),
+  # 3-seed median, epochs=180 checkpoint, fully cross-domain characterized.
+  epochs_180_streaming:
+    merged_wer: 12.11%
+    legal_wer: 9.84%     # best cross-domain number in this whole investigation
+    legacy_wer: 22.50%   # the one domain where 180 slightly underperforms 120 (20.00%)
     ttft_from_speech_seconds: ~0.9-1.0     # excludes leading silence
-    word_commit_lag_seconds: ~0.85-0.9
+    word_commit_lag_seconds: ~0.85-0.91
 
 known_gaps:
-  - "epochs=180 not yet cross-domain/streaming/beam tested (only in-domain merged confirmed)"
-  - "epoch ceiling not found -- 180 was still improving; higher counts untested"
   - "a differential decoder/joint LR recipe (base ~2.5e-5, decoder/joint at x0.2, wd=0.01, ~70 epochs) was surfaced from outside this repo and never implemented/compared -- nemotron_finetune.py has no per-module LR support currently"
-  - "legacy WER is split-dependent: 13.5% on the older ad-hoc split vs 20.0% here, same recipe -- unexplained"
+  - "legacy WER is split-dependent: 13.5% on the older ad-hoc split vs 20.0-22.5% here, same recipe -- unexplained; also the one domain where more epochs (180 vs 120) made things worse"
+  - "epoch sweep stopped at 180 based on single-seed 210/240 screens (240 truncated by cluster cancellation, see writeup) -- not 3-seed-confirmed past 180"
