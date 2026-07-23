@@ -57,6 +57,7 @@ export LORA_DROPOUT="${LORA_DROPOUT:-0.0}"
 export SPECAUG="${SPECAUG:-1}"
 export SEED="${SEED:-}"           # set an int for reproducible runs
 export NUM_WORKERS="${NUM_WORKERS:-2}"
+export RESUME_CKPT="${RESUME_CKPT:-}"  # PTL .ckpt path to resume optimizer/scheduler/epoch state from
 export HF_HOME="${HF_HOME:-/scratch/${USER}/.huggingface}"
 export TMPDIR="${TMPDIR:-/scratch/${USER}/.tmp}"
 mkdir -p "${TMPDIR}"
@@ -69,6 +70,8 @@ TRAIN_DECODER_FLAG=""
 [[ "${TRAIN_DECODER}" == "1" ]] && TRAIN_DECODER_FLAG="--train-decoder"
 SEED_FLAG=""
 [[ -n "${SEED}" ]] && SEED_FLAG="--seed ${SEED}"
+RESUME_FLAG=""
+[[ -n "${RESUME_CKPT}" ]] && RESUME_FLAG="--resume-ckpt ${RESUME_CKPT}"
 LORA_FLAG=""
 [[ "${LORA}" == "1" ]] && LORA_FLAG="--lora --lora-dim ${LORA_DIM} --lora-dropout ${LORA_DROPOUT}"
 
@@ -127,7 +130,7 @@ fi
   --precision "${PRECISION}" \
   --unfreeze-encoder-layers "${UNFREEZE_ENCODER_LAYERS}" \
   --num-workers "${NUM_WORKERS}" \
-  ${SPECAUG_FLAG} ${TRAIN_DECODER_FLAG} ${SEED_FLAG} ${LORA_FLAG}
+  ${SPECAUG_FLAG} ${TRAIN_DECODER_FLAG} ${SEED_FLAG} ${LORA_FLAG} ${RESUME_FLAG}
 
 # Report on the checkpoint the SELECTION set (VAL_FILE) picked as best,
 # evaluated on the disjoint TEST_FILE -- falls back to the last-epoch

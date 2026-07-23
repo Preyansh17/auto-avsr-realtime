@@ -49,6 +49,8 @@ def parse_args():
     p.add_argument("--precision", default="bf16-mixed")
     p.add_argument("--gpus", type=int, default=1)
     p.add_argument("--grad-accum", type=int, default=1)
+    p.add_argument("--resume-ckpt", default=None,
+                   help="PTL .ckpt path to resume optimizer/scheduler/epoch state from")
     # Green freeze
     p.add_argument("--unfreeze-encoder-layers", type=int, default=5,
                    help="train encoder layers [0, N); -1 = train all")
@@ -358,7 +360,7 @@ def main():
         callbacks=[best_wer_cb],
     )
     model.set_trainer(trainer)
-    trainer.fit(model)
+    trainer.fit(model, ckpt_path=args.resume_ckpt)
 
     out = os.path.join(args.output_dir, "nemotron_patient.nemo")
     model.save_to(out)

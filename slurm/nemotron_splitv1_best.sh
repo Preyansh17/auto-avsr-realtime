@@ -1,14 +1,23 @@
 #!/bin/bash
 # Reproduce the best Nemotron config found so far: full-FT, merged domain,
-# 180 epochs, on the audited patient_legal298_legacy96_split_v1 split.
+# 210 epochs, on the audited patient_legal298_legacy96_split_v1 split.
 # See asr_baselines/configs/nemotron_splitv1_best.yaml for the recipe
 # summary and results/nemotron_splitv1_epoch_sweep_2026-07-18.md for the
-# full writeup (epoch sweep, cross-domain eval, open items).
+# full writeup (epoch sweep, cross-domain eval, open items). If
+# legacy-domain accuracy matters more than merged/legal, use EPOCHS=180
+# instead -- see the writeup's "210 vs 240" section for the tradeoff.
 #
 # Usage (from the repo root, on the torch cluster):
 #   bash slurm/nemotron_splitv1_best.sh              # submits seeds 1,2,3
 #   SEEDS="1" bash slurm/nemotron_splitv1_best.sh    # submits just seed 1
-#   EPOCHS=120 bash slurm/nemotron_splitv1_best.sh   # reproduce a different point on the sweep
+#   EPOCHS=180 bash slurm/nemotron_splitv1_best.sh   # reproduce a different point on the sweep
+#
+# Long runs (200+ epochs) on this cluster carry a real risk of being killed
+# by an automated GPU-utilization monitor after ~2h. If that happens,
+# resubmit with RESUME_CKPT=<path to the .ckpt under
+# EXP_DIR/<exp_name>/lightning_logs/version_<killed_jobid>/checkpoints/> --
+# nemotron_finetune.py picks up optimizer/scheduler/epoch state from there
+# instead of restarting. See the writeup's "Checkpoint resume" section.
 #
 # Each seed's post-training eval (automatic, inside nemotron_finetune.sbatch)
 # reports in-domain merged offline greedy WER only. For the full cross-domain
@@ -24,8 +33,9 @@ LABELS_DIR="${LABELS_DIR:-/scratch/${USER}/avsr_realtime/labels/splitv1}"
 SPLIT_ROOT="${SPLIT_ROOT:-/scratch/th3482/LipVideoData/patient_legal298_legacy96_split_v1}"
 NEMO_ENV="${NEMO_ENV:-/scratch/${USER}/envs/nemo_asr}"
 ACCOUNT="${ACCOUNT:-torch_pr_39_tandon_advanced}"
-EPOCHS="${EPOCHS:-180}"
+EPOCHS="${EPOCHS:-210}"
 SEEDS="${SEEDS:-1 2 3}"
+RESUME_CKPT="${RESUME_CKPT:-}"
 
 TRAIN_FILE="${LABELS_DIR}/merged_train_spm1023.csv"
 VAL_FILE="${LABELS_DIR}/merged_val_spm1023.csv"
@@ -53,6 +63,6 @@ done
 # is expected, not a bug in this script.
 for seed in ${SEEDS}; do
   sbatch --account="${ACCOUNT}" \
-    --export=ALL,RUN_DATA_MODE=merged,ROOT_DIR="${SPLIT_ROOT}",TRAIN_FILE="${TRAIN_FILE}",VAL_FILE="${VAL_FILE}",TEST_FILE="${TEST_FILE}",UNFREEZE_ENCODER_LAYERS=-1,TRAIN_DECODER=1,BATCH_SIZE=2,GRAD_ACCUM=2,LEARNING_RATE=1e-4,EPOCHS="${EPOCHS}",SEED="${seed}",EXP_NAME="nemotron_fullft_epochs${EPOCHS}_splitv1merged_seed${seed}" \
+    --export=ALL,RUN_DATA_MODE=merged,ROOT_DIR="${SPLIT_ROOT}",TRAIN_FILE="${TRAIN_FILE}",VAL_FILE="${VAL_FILE}",TEST_FILE="${TEST_FILE}",UNFREEZE_ENCODER_LAYERS=-1,TRAIN_DECODER=1,BATCH_SIZE=2,GRAD_ACCUM=2,LEARNING_RATE=1e-4,EPOCHS="${EPOCHS}",SEED="${seed}",RESUME_CKPT="${RESUME_CKPT}",EXP_NAME="nemotron_fullft_epochs${EPOCHS}_splitv1merged_seed${seed}" \
     "${PROJECT_ROOT}/slurm/nemotron_finetune.sbatch"
 done
