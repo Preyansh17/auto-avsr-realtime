@@ -60,6 +60,26 @@ def parse_args():
     p.add_argument("--speed-perturb", action="store_true",
                    help="enable Lhotse's train_ds.perturb_speed (random speed "
                         "perturbation augmentation), off by default")
+    p.add_argument("--ckpt-every-n-epochs", type=int, default=1,
+                   help="write Lightning's resume checkpoint (.ckpt, ~7GB -- "
+                        "3x the model because it carries Adam's two moments "
+                        "per param) only every N epochs. This write is pure "
+                        "resume insurance for the cluster's auto-cancellation "
+                        "policy; it is NOT the best-checkpoint deliverable "
+                        "(that's SaveBestWER's .nemo). At ~171MB/s on scratch "
+                        "a 7GB write is ~40s -- on par with a whole epoch's "
+                        "training compute, so this is the single biggest "
+                        "wall-clock/GPU-utilization lever. Cost of N>1: a "
+                        "cancellation loses up to N epochs of progress.")
+    p.add_argument("--val-every-n-epochs", type=int, default=1,
+                   help="run validation (and therefore best-checkpoint "
+                        "selection + checkpoint writes) only every N epochs. "
+                        "At this dataset's size the per-epoch validation pass "
+                        "and its multi-GB checkpoint writes dominate wall-clock "
+                        "over actual training compute, so N>1 is the main "
+                        "speed lever. Costs checkpoint-selection granularity: "
+                        "N=3 over 210 epochs gives 70 candidate checkpoints "
+                        "instead of 210.")
     # Green freeze
     p.add_argument("--unfreeze-encoder-layers", type=int, default=5,
                    help="train encoder layers [0, N); -1 = train all")
@@ -375,17 +395,50 @@ def main():
     best_out = os.path.join(args.output_dir, "nemotron_best.nemo")
     best_wer_cb = make_save_best_wer_callback(best_out)
 
+    # Validation frequency is the main wall-clock lever at this dataset size
+    # (314 train clips): a training epoch is only ~10-15s of actual compute,
+    # but every validation epoch also drags in SaveBestWER's 2.4GB .nemo
+    # serialization (whenever val_wer improves -- i.e. most early epochs) and
+    # Lightning's own default ModelCheckpoint .ckpt write. Those I/O stalls,
+    # not batch compute, are what keep averaged GPU utilization low. Raising
+    # this reduces all three costs at once. Batch size was tried first and
+    # barely moved epochs/minute, which is what pointed here.
+    if args.val_every_n_epochs > 1:
+        print(f"Validation every {args.val_every_n_epochs} epochs "
+              f"(~{args.epochs // args.val_every_n_epochs} checkpoint-selection "
+              f"points over {args.epochs} epochs)")
+
+    callbacks = [best_wer_cb]
+    if args.ckpt_every_n_epochs > 1:
+        # Replace Lightning's implicit every-validation-epoch ModelCheckpoint
+        # with an explicit, less frequent one. Passing any ModelCheckpoint in
+        # callbacks suppresses the default. save_top_k=-1 with every_n_epochs
+        # would accumulate 7GB files; save_top_k=1 keeps exactly one rolling
+        # resume point, which is all --resume-ckpt needs.
+        from lightning.pytorch.callbacks import ModelCheckpoint
+
+        callbacks.append(ModelCheckpoint(
+            every_n_epochs=args.ckpt_every_n_epochs,
+            save_top_k=1,
+            monitor=None,
+            save_last=False,
+        ))
+        print(f"Resume-checkpoint (.ckpt) written every "
+              f"{args.ckpt_every_n_epochs} epochs instead of every validation "
+              f"epoch (~7GB/write at ~171MB/s scratch throughput)")
+
     trainer = pl.Trainer(
         devices=args.gpus,
         accelerator="gpu" if args.gpus > 0 else "cpu",
         max_epochs=args.epochs,
         precision=args.precision,
         accumulate_grad_batches=args.grad_accum,
+        check_val_every_n_epoch=args.val_every_n_epochs,
         log_every_n_steps=10,
         enable_checkpointing=True,
         default_root_dir=args.output_dir,
         gradient_clip_val=1.0,
-        callbacks=[best_wer_cb],
+        callbacks=callbacks,
     )
     model.set_trainer(trainer)
     trainer.fit(model, ckpt_path=args.resume_ckpt)

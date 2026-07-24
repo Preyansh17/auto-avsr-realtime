@@ -61,6 +61,8 @@ export NUM_WORKERS="${NUM_WORKERS:-2}"
 export RESUME_CKPT="${RESUME_CKPT:-}"  # PTL .ckpt path to resume optimizer/scheduler/epoch state from
 export SPEED_PERTURB="${SPEED_PERTURB:-0}"
 export DECODER_JOINT_LR_SCALE="${DECODER_JOINT_LR_SCALE:-1.0}"  # e.g. 0.2 -> decoder+joint LR = LEARNING_RATE*0.2; 1.0 = disabled (flat LR)
+export VAL_EVERY_N_EPOCHS="${VAL_EVERY_N_EPOCHS:-1}"    # >1 cuts validation passes and the best-checkpoint (.nemo, 2.4GB) writes they trigger; costs selection granularity
+export CKPT_EVERY_N_EPOCHS="${CKPT_EVERY_N_EPOCHS:-1}"  # >1 cuts the ~7GB resume-checkpoint write frequency (biggest wall-clock lever); a cancellation then loses up to N epochs
 export HF_HOME="${HF_HOME:-/scratch/${USER}/.huggingface}"
 export TMPDIR="${TMPDIR:-/scratch/${USER}/.tmp}"
 mkdir -p "${TMPDIR}"
@@ -132,6 +134,8 @@ fi
   --learning-rate "${LEARNING_RATE}" \
   --weight-decay "${WEIGHT_DECAY}" \
   --decoder-joint-lr-scale "${DECODER_JOINT_LR_SCALE}" \
+  --val-every-n-epochs "${VAL_EVERY_N_EPOCHS}" \
+  --ckpt-every-n-epochs "${CKPT_EVERY_N_EPOCHS}" \
   --batch-size "${BATCH_SIZE}" \
   --grad-accum "${GRAD_ACCUM}" \
   --precision "${PRECISION}" \
