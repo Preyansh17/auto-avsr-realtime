@@ -51,6 +51,9 @@ def parse_args():
     p.add_argument("--grad-accum", type=int, default=1)
     p.add_argument("--resume-ckpt", default=None,
                    help="PTL .ckpt path to resume optimizer/scheduler/epoch state from")
+    p.add_argument("--speed-perturb", action="store_true",
+                   help="enable Lhotse's train_ds.perturb_speed (random speed "
+                        "perturbation augmentation), off by default")
     # Green freeze
     p.add_argument("--unfreeze-encoder-layers", type=int, default=5,
                    help="train encoder layers [0, N); -1 = train all")
@@ -272,6 +275,7 @@ def main():
         model.cfg.train_ds.min_duration = args.min_duration
         model.cfg.train_ds.shuffle = True
         model.cfg.train_ds.use_bucketing = False
+        model.cfg.train_ds.perturb_speed = args.speed_perturb
         # The pretrained model's saved train_ds/validation_ds config default to
         # text_field="answer" (visible in the printed config at model-load
         # time) -- some fine-tuning use case's manifest convention, not the

@@ -1,6 +1,6 @@
 # Nemotron on the audited split_v1: epoch sweep, cross-domain generalization, best config
 
-**Date:** 2026-07-18 → 2026-07-22
+**Date:** 2026-07-18 → 2026-07-24
 **Branch:** `realtime-port`
 
 ## Why this file exists
@@ -80,6 +80,26 @@ Streaming WER equals offline greedy WER exactly on every one of these 27 runs (9
 
 **Epochs=210 is now the recommended default Nemotron config** — full battery characterized the same way as 120 and 180, and it wins on the two larger/more reliable domains (merged, legal). If legacy-domain accuracy specifically matters for a given deployment, 180 remains the better choice there (22.50% vs 210's 25.00%) — this is a genuine tradeoff, not a strict dominance.
 
+## Speed perturbation (2026-07-22 → 2026-07-24): new best config
+
+Speed perturbation was an open item never attempted for Nemotron. NeMo's Lhotse dataloader already supports it natively via `train_ds.perturb_speed` (confirmed via `LhotseDataLoadingConfig`'s fields, default `False`) — no new augmentation code needed, just wiring. Added `--speed-perturb` to `nemotron_finetune.py` (sets `model.cfg.train_ds.perturb_speed = args.speed_perturb`) and a `SPEED_PERTURB` env var passthrough in `nemotron_finetune.sbatch`.
+
+3 seeds, epochs=210, merged, offline greedy WER:
+
+| Seed | Speed-perturb WER | Non-perturbed WER (epochs=210) |
+|---|---|---|
+| 1 | 11.21% | 13.00% |
+| 2 | 9.87% | 11.21% |
+| 3 | 10.76% | 11.21% |
+| **Median** | **10.76%** | 11.21% |
+| **Mean** | **10.61%** | 11.81% |
+
+**This is a real improvement, not seed noise** — speed perturbation beats or ties its non-perturbed counterpart on all 3 individual seeds, not just in aggregate (median improves 0.45pp, mean improves 1.2pp). **New best Nemotron config: epochs=210, merged, speed perturbation on — 10.76% median WER.**
+
+Training cost roughly doubled: speed perturbation's per-sample resampling adds real compute, cutting throughput from ~1.2-1.4 epochs/min to ~0.5-0.8 epochs/min. All 3 seeds needed 2-3 checkpoint-resume rescues each from the cluster's ~2h15-2h20m auto-cancellation window (seed1: 2 rescues, ~3h18m total; seed2/seed3: 3 rescues each, ~5h total each) — the `--resume-ckpt` feature (see "Checkpoint resume" above) made this a non-issue operationally, just slower wall-clock.
+
+**Not yet done:** the full cross-domain/streaming/beam battery (legal, legacy, beam decode, streaming latency) that 120/180/210 (non-perturbed) all received. Val WER at the selected checkpoint hasn't been pulled either. Until that battery runs, this is confirmed as the best *merged-domain offline* number, not yet confirmed as the best *overall* config the way plain epochs=210 was.
+
 ## Split comparison: same recipe, different legacy result
 
 | | Ad-hoc split (legacy) | split_v1 (legacy) |
@@ -88,7 +108,7 @@ Streaming WER equals offline greedy WER exactly on every one of these 27 runs (9
 
 Legacy diverges sharply by split even holding the recipe fixed — both are N=10 test sets, but this isn't just seed noise (holds across every epoch count tested on split_v1: 90→30.0%, 120→20.0%, 180→22.5%, 210→25.0%, monotonically worsening). Which legacy test set is more representative of real deployment is an open question this repo hasn't resolved. Legacy is also the one domain where more epochs consistently make things worse — the opposite trend from merged and legal — throughout this whole investigation.
 
-## Best config found (split_v1, merged, epochs=210, offline greedy 11.21% median / 11.21% best-tied seed)
+## Best config found (split_v1, merged, epochs=210 + speed perturbation, offline greedy 10.76% median / 9.87% best seed)
 
 ```
 RUN_DATA_MODE=merged
@@ -103,12 +123,13 @@ GRAD_ACCUM=2                 # effective batch 4
 LEARNING_RATE=1e-4           # flat, single LR for the whole model
 EPOCHS=210
 SPECAUG=1                    # default, never ablated on split_v1
+SPEED_PERTURB=1              # new 2026-07-24; wires NeMo's native train_ds.perturb_speed
 ```
 All other `nemotron_finetune.py` args left at script defaults: `warmup-steps=200`, `weight-decay=1e-3`, `precision=bf16-mixed`. Neither warmup nor weight decay nor a differential decoder/joint learning rate has been swept on this split — see Open items.
 
-**If legacy-domain accuracy matters more than merged/legal for your deployment**, use `EPOCHS=180` instead (22.50% vs 210's 25.00% on legacy, at the cost of 12.11% vs 11.21% on merged and 9.84% vs 8.20% on legal) — see "210 vs 240" above for the full tradeoff.
+**If legacy-domain accuracy matters more than merged/legal for your deployment**, use `EPOCHS=180` without speed perturbation instead (22.50% vs epochs=210's 25.00% on legacy at the equivalent non-perturbed setting; legacy hasn't been tested with speed perturbation at all) — see "210 vs 240" above for the epoch-count tradeoff. This is provisional until the cross-domain battery confirms speed perturbation doesn't have its own legacy-specific downside.
 
-Checkpoints on cluster: `/scratch/pa2753/experiments/nemotron_asr/nemotron_fullft_epochs210_splitv1merged_seed{1,2,3}/nemotron_best.nemo` (epochs=180 checkpoints remain at `nemotron_fullft_epochs180_splitv1merged_seed{1,2,3}/` if the legacy-favoring config is needed). `slurm/nemotron_splitv1_best.sh` reproduces the epochs=180 run by default; pass `EPOCHS=210` to reproduce the new default (note: as of 2026-07-22 the actual 210/240 runs used `nemotron_finetune.py`'s new `--resume-ckpt` flag partway through due to cluster auto-cancellation — a from-scratch `EPOCHS=210` run via this script should reach the same result but hasn't been separately verified end-to-end).
+Checkpoints on cluster: `/scratch/pa2753/experiments/nemotron_asr/nemotron_fullft_epochs210_splitv1merged_seed{1,2,3}_speedperturb/nemotron_best.nemo` (non-perturbed epochs=210 checkpoints remain at `nemotron_fullft_epochs210_splitv1merged_seed{1,2,3}/`, epochs=180 at `nemotron_fullft_epochs180_splitv1merged_seed{1,2,3}/` if the legacy-favoring config is needed). `slurm/nemotron_splitv1_best.sh` reproduces the epochs=210 non-perturbed run by default; pass `SPEED_PERTURB=1` to reproduce the new best config (note: as of 2026-07-24 the actual speed-perturbation runs each needed 2-3 rounds of `nemotron_finetune.py`'s `--resume-ckpt` due to cluster auto-cancellation — a from-scratch `SPEED_PERTURB=1` run via this script should reach the same result but will take noticeably longer wall-clock, and hasn't been separately verified end-to-end in one shot).
 
 ## Open items
 
@@ -117,6 +138,5 @@ Checkpoints on cluster: `/scratch/pa2753/experiments/nemotron_asr/nemotron_fullf
 - Epoch sweep stopped at 210 as a practical/cost tradeoff, not because 240 was shown worse — 240 actually ties or marginally beats 210 on merged (see "210 vs 240" above), but was never given the full cross-domain/streaming/beam battery. If a tighter epochs=240 characterization is ever needed, that battery (27 more eval jobs) is the next step, not more training.
 - This file's results are not yet reflected in `README.md`'s leaderboard tables (which currently cite epochs=90 ad-hoc-split numbers as the Nemotron entry).
 - LoRA restore bug (unrelated to this file's investigation, carried over from earlier work) remains unresolved.
-- Speed perturbation, never attempted for Nemotron.
-- A `check_val_every_n_epoch`-style reduction in validation frequency was identified (2026-07-22) as the most promising remaining wall-clock lever — at this dataset size (314 train examples), fixed per-epoch overhead (validation pass, checkpoint bookkeeping) dominates over raw batch compute, so bigger batch sizes barely moved epochs/minute in a scouting test. Not implemented or tested.
-- `nemotron_finetune.py`'s new `--resume-ckpt` flag and `SaveBestWER`'s reset-on-resume caveat (see "Checkpoint resume" above) are currently only patched into the cluster's local checkout, not committed to this repo.
+- **Speed perturbation + epochs=210 is the new best merged-domain config (10.76% median) but has no cross-domain/streaming/beam battery yet** — the same 27-job battery epochs=120/180/210 (non-perturbed) all received. Until that runs, don't treat this as a confirmed replacement for the plain epochs=210 config in cross-domain or streaming/latency contexts, only for merged offline WER.
+- A `check_val_every_n_epoch`-style reduction in validation frequency was identified (2026-07-22) as the most promising remaining wall-clock lever — at this dataset size (314 train examples), fixed per-epoch overhead (validation pass, checkpoint bookkeeping) dominates over raw batch compute, so bigger batch sizes barely moved epochs/minute in a scouting test. Not implemented or tested. Would help most with speed perturbation's now-doubled training time.

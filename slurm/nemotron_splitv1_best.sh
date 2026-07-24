@@ -1,16 +1,23 @@
 #!/bin/bash
 # Reproduce the best Nemotron config found so far: full-FT, merged domain,
-# 210 epochs, on the audited patient_legal298_legacy96_split_v1 split.
-# See asr_baselines/configs/nemotron_splitv1_best.yaml for the recipe
-# summary and results/nemotron_splitv1_epoch_sweep_2026-07-18.md for the
-# full writeup (epoch sweep, cross-domain eval, open items). If
-# legacy-domain accuracy matters more than merged/legal, use EPOCHS=180
-# instead -- see the writeup's "210 vs 240" section for the tradeoff.
+# 210 epochs + speed perturbation, on the audited
+# patient_legal298_legacy96_split_v1 split. See
+# asr_baselines/configs/nemotron_splitv1_best.yaml for the recipe summary and
+# results/nemotron_splitv1_epoch_sweep_2026-07-18.md for the full writeup
+# (epoch sweep, speed perturbation, cross-domain eval, open items). Speed
+# perturbation has only been confirmed on merged offline WER so far -- no
+# cross-domain/streaming/beam battery yet. If legacy-domain accuracy matters
+# more than merged/legal, use EPOCHS=180 SPEED_PERTURB=0 instead -- see the
+# writeup's "210 vs 240" section for the tradeoff.
 #
 # Usage (from the repo root, on the torch cluster):
-#   bash slurm/nemotron_splitv1_best.sh              # submits seeds 1,2,3
-#   SEEDS="1" bash slurm/nemotron_splitv1_best.sh    # submits just seed 1
-#   EPOCHS=180 bash slurm/nemotron_splitv1_best.sh   # reproduce a different point on the sweep
+#   bash slurm/nemotron_splitv1_best.sh                    # submits seeds 1,2,3, speed perturbation on
+#   SEEDS="1" bash slurm/nemotron_splitv1_best.sh          # submits just seed 1
+#   SPEED_PERTURB=0 bash slurm/nemotron_splitv1_best.sh    # reproduce plain epochs=210 (no speed perturbation)
+#   EPOCHS=180 SPEED_PERTURB=0 bash slurm/nemotron_splitv1_best.sh   # reproduce a different point on the sweep
+#
+# Speed perturbation roughly doubles training wall-clock (per-sample
+# resampling cost) -- expect to need RESUME_CKPT more than once per seed.
 #
 # Long runs (200+ epochs) on this cluster carry a real risk of being killed
 # by an automated GPU-utilization monitor after ~2h. If that happens,
@@ -36,6 +43,7 @@ ACCOUNT="${ACCOUNT:-torch_pr_39_tandon_advanced}"
 EPOCHS="${EPOCHS:-210}"
 SEEDS="${SEEDS:-1 2 3}"
 RESUME_CKPT="${RESUME_CKPT:-}"
+SPEED_PERTURB="${SPEED_PERTURB:-1}"
 
 TRAIN_FILE="${LABELS_DIR}/merged_train_spm1023.csv"
 VAL_FILE="${LABELS_DIR}/merged_val_spm1023.csv"
@@ -61,8 +69,11 @@ done
 # source directories as split_v1's, confirmed by inspection. The printed
 # ROOT_DIR= line in the job log will show MERGED_ROOT, not SPLIT_ROOT; that
 # is expected, not a bug in this script.
+SUFFIX=""
+[[ "${SPEED_PERTURB}" == "1" ]] && SUFFIX="_speedperturb"
+
 for seed in ${SEEDS}; do
   sbatch --account="${ACCOUNT}" \
-    --export=ALL,RUN_DATA_MODE=merged,ROOT_DIR="${SPLIT_ROOT}",TRAIN_FILE="${TRAIN_FILE}",VAL_FILE="${VAL_FILE}",TEST_FILE="${TEST_FILE}",UNFREEZE_ENCODER_LAYERS=-1,TRAIN_DECODER=1,BATCH_SIZE=2,GRAD_ACCUM=2,LEARNING_RATE=1e-4,EPOCHS="${EPOCHS}",SEED="${seed}",RESUME_CKPT="${RESUME_CKPT}",EXP_NAME="nemotron_fullft_epochs${EPOCHS}_splitv1merged_seed${seed}" \
+    --export=ALL,RUN_DATA_MODE=merged,ROOT_DIR="${SPLIT_ROOT}",TRAIN_FILE="${TRAIN_FILE}",VAL_FILE="${VAL_FILE}",TEST_FILE="${TEST_FILE}",UNFREEZE_ENCODER_LAYERS=-1,TRAIN_DECODER=1,BATCH_SIZE=2,GRAD_ACCUM=2,LEARNING_RATE=1e-4,EPOCHS="${EPOCHS}",SEED="${seed}",SPEED_PERTURB="${SPEED_PERTURB}",RESUME_CKPT="${RESUME_CKPT}",EXP_NAME="nemotron_fullft_epochs${EPOCHS}_splitv1merged_seed${seed}${SUFFIX}" \
     "${PROJECT_ROOT}/slurm/nemotron_finetune.sbatch"
 done
