@@ -3,11 +3,14 @@
 # split_audit.json, seed=7). Trained once on `merged`; evaluated cross-domain
 # on legal and legacy without retraining. See
 # results/nemotron_splitv1_epoch_sweep_2026-07-18.md for the full writeup,
-# epoch sweep, and open items. New best (2026-07-24): epochs=210 + speed
-# perturbation, 10.76% median merged WER -- beats plain epochs=210 (11.21%)
-# on all 3 seeds individually, not just in aggregate. NOT YET given the full
-# cross-domain/streaming/beam battery that plain epochs=210 got -- see
-# `results` below and `known_gaps`.
+# epoch sweep, and open items.
+#
+# Best as of 2026-07-24: epochs=210 + speed perturbation. Fully characterized
+# with the same 27-job cross-domain/streaming/beam battery the non-perturbed
+# configs got. Wins merged (10.76% vs 11.21%) and legal (6.56% vs 8.20%, the
+# best cross-domain number in the whole investigation) -- but REGRESSES legacy
+# by 5pp (30.00% vs 25.00%). Not an unconditional recommendation: if legacy
+# matters, see the epochs=180 alternative below and `known_gaps`.
 #
 # This file documents the recipe for humans; it is not consumed by
 # nemotron_finetune.py directly (no YAML config loader exists for Nemotron in
@@ -17,7 +20,7 @@
 data:
   split: patient_legal298_legacy96_split_v1
   domain_trained_on: merged      # train314 / val40 / test40
-  domains_evaluated: [merged]    # legal/legacy cross-domain eval not yet run for the speed-perturb config
+  domains_evaluated: [merged, legal, legacy]  # legal/legacy are cross-domain, zero extra training
   root_dir: /scratch/th3482/LipVideoData/patient_legal298_legacy96_split_v1
   # Split's own label CSVs (labels/{domain}/{train,val,test}.csv) carry
   # unigram5000 token ids -- retokenize to the 1023-piece SPM vocab first via
@@ -28,39 +31,42 @@ model:
   finetune_mode: full            # unfreeze_encoder_layers=-1, train_decoder=1 (encoder+decoder+joint all trainable)
 
 optim:
-  learning_rate: 1e-4            # flat, single LR for the whole model -- no decoder/joint differential tried here
+  learning_rate: 1e-4            # flat, single LR for the whole model
   weight_decay: 1e-3             # script default, never swept on this split
   warmup_steps: 200              # script default, never swept on this split
   batch_size: 2
   grad_accum: 2                  # effective batch 4
   precision: bf16-mixed
-  epochs: 210                    # swept 90/120/150/180/210/240, 210 chosen as the practical stopping point (see writeup)
+  epochs: 210                    # swept 90/120/150/180/210/240; 210 chosen as the practical stopping point (see writeup)
 
 augmentation:
   specaugment: true               # default on; not ablated on this split
-  speed_perturb: true             # new 2026-07-24; wires NeMo's native train_ds.perturb_speed (Lhotse dataloader config field)
+  speed_perturb: true             # wires NeMo's native train_ds.perturb_speed (Lhotse dataloader field)
 
 results:
-  # offline greedy, 3-seed, epochs=210 + speed perturbation, merged only --
-  # cross-domain/streaming/beam battery not yet run for this config.
-  epochs_210_speedperturb:
-    merged_wer_median: 10.76%
-    merged_wer_mean: 10.61%
-    per_seed_wer: [11.21%, 9.87%, 10.76%]
+  # 3-seed medians. "streaming" is the deployable number (greedy is the only
+  # decode strategy that works in NeMo's cache-aware carried-state loop; beam
+  # is confirmed unimplemented there and is a ceiling reference only).
+  # Streaming equals offline greedy exactly on every run in this investigation.
+  epochs_210_speedperturb:        # <-- current best
+    merged_wer: 10.76%           # streaming == offline greedy
+    legal_wer: 6.56%             # best cross-domain number anywhere in this investigation (best seed: 5.46%)
+    legacy_wer: 30.00%           # WORST tested -- 5pp regression vs non-perturbed
+    beam_wer: [11.66%, 8.20%, 27.50%]   # merged/legal/legacy -- beam loses to greedy except on legacy
+    ttft_from_speech_seconds: ~0.98-1.04   # excludes leading silence
+    word_commit_lag_seconds: ~1.00-1.02
     training_cost: "~2x slower than non-perturbed (per-sample resampling); each seed needed 2-3 checkpoint-resume rescues from cluster auto-cancellation"
 
-  # streaming (greedy -- the only decode strategy that works in NeMo's
-  # cache-aware carried-state loop; beam is confirmed unimplemented there),
-  # 3-seed median, epochs=210 checkpoint (no speed perturbation), fully cross-domain characterized.
-  epochs_210_streaming:
+  # alternative: clearly better on legacy, worse on merged/legal.
+  epochs_210_no_speedperturb:
     merged_wer: 11.21%
-    legal_wer: 8.20%     # best cross-domain number in this whole investigation
-    legacy_wer: 25.00%   # worst of 120/180/210 -- legacy monotonically worsens with more epochs
-    ttft_from_speech_seconds: ~1.0-1.03    # excludes leading silence
+    legal_wer: 8.20%
+    legacy_wer: 25.00%
+    ttft_from_speech_seconds: ~1.0-1.03
     word_commit_lag_seconds: ~0.92-0.95
 
-  # alternative: better on legacy specifically, at the cost of merged/legal.
-  epochs_180_streaming:
+  # best legacy result of any config tested.
+  epochs_180_no_speedperturb:
     merged_wer: 12.11%
     legal_wer: 9.84%
     legacy_wer: 22.50%
@@ -68,8 +74,8 @@ results:
     word_commit_lag_seconds: ~0.85-0.91
 
 known_gaps:
-  - "epochs=210 + speed perturbation (10.76% median) has no cross-domain/streaming/beam battery yet -- only merged offline WER confirmed. Treat as best-known merged config, not yet as an overall replacement for plain epochs=210 in cross-domain or latency contexts."
-  - "a differential decoder/joint LR recipe (base ~2.5e-5, decoder/joint at x0.2, wd=0.01, ~70 epochs) was surfaced from outside this repo and never implemented/compared -- nemotron_finetune.py has no per-module LR support currently"
-  - "legacy WER is split-dependent (13.5% ad-hoc vs 20.0-25.0% here) and monotonically worsens as epoch count increases (120->180->210: 20.0%->22.5%->25.0%) -- unexplained, root cause not investigated; unknown whether speed perturbation changes this"
-  - "epochs=240 ties/marginally beats plain epochs=210 on merged WER but was never given the full cross-domain/streaming/beam battery -- 210 was chosen on cost/risk grounds, not because 240 was shown worse"
-  - "nemotron_finetune.py gained --resume-ckpt (2026-07-22) and --speed-perturb (2026-07-24) flags -- see writeup's Checkpoint resume section for a caveat on SaveBestWER's best-tracking resetting on resume"
+  - "legacy regresses monotonically as merged/legal improve (120/180/210/210+perturb: 20.00/22.50/25.00/30.00%) -- speed perturbation moved it more than the whole epoch sweep did. Unresolved whether legacy's N=10 test set is simply untrustworthy or merged-domain training genuinely drifts from legacy acoustics. Do NOT adopt 210+speedperturb if legacy matters."
+  - "a differential decoder/joint LR recipe (base 2.5e-5, decoder/joint x0.2, wd=0.01, 70 epochs) was implemented (--decoder-joint-lr-scale) and tried: 28.25% WER, not competitive -- but confounded by low LR + short epoch count, so not a clean refutation of the idea"
+  - "epochs=240 ties/marginally beats plain epochs=210 on merged WER but was never given the full battery -- 210 was chosen on cost/risk grounds, not because 240 was shown worse"
+  - "training-speed levers --val-every-n-epochs / --ckpt-every-n-epochs are implemented and the bottleneck is measured (a 7GB .ckpt write per validation epoch at ~171MB/s scratch exceeds the ~27s of per-epoch training compute), but the A/B quantifying them never got off the cluster queue -- both default to 1 (unchanged behavior) until measured"
+  - "nemotron_finetune.py gained --resume-ckpt (2026-07-22) to survive the cluster's auto-cancellation policy -- see the writeup's Checkpoint resume section for a caveat on SaveBestWER's best-tracking resetting on resume"

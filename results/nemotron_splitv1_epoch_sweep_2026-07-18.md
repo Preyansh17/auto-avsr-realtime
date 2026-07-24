@@ -98,7 +98,35 @@ Speed perturbation was an open item never attempted for Nemotron. NeMo's Lhotse 
 
 Training cost roughly doubled: speed perturbation's per-sample resampling adds real compute, cutting throughput from ~1.2-1.4 epochs/min to ~0.5-0.8 epochs/min. All 3 seeds needed 2-3 checkpoint-resume rescues each from the cluster's ~2h15-2h20m auto-cancellation window (seed1: 2 rescues, ~3h18m total; seed2/seed3: 3 rescues each, ~5h total each) — the `--resume-ckpt` feature (see "Checkpoint resume" above) made this a non-issue operationally, just slower wall-clock.
 
-**Not yet done:** the full cross-domain/streaming/beam battery (legal, legacy, beam decode, streaming latency) that 120/180/210 (non-perturbed) all received. Val WER at the selected checkpoint hasn't been pulled either. Until that battery runs, this is confirmed as the best *merged-domain offline* number, not yet confirmed as the best *overall* config the way plain epochs=210 was.
+### Speed-perturbation full battery (3 seeds × 3 domains × 3 decode modes)
+
+Run 2026-07-24 against the three `nemotron_fullft_epochs210_splitv1merged_seed{1,2,3}_speedperturb` checkpoints, same 27-job protocol the non-perturbed configs got.
+
+| Domain | Mode | Seed1 | Seed2 | Seed3 | Median | vs non-perturbed 210 |
+|---|---|---|---|---|---|---|
+| merged | offline greedy | 11.21% | 9.87% | 10.76% | **10.76%** | 11.21% → **−0.45pp** |
+| merged | offline +beam | 11.21% | 11.66% | 12.56% | 11.66% | 12.11% → −0.45pp |
+| merged | **streaming** | 11.21% | 9.87% | 10.76% | **10.76%** | 11.21% → **−0.45pp** |
+| legal | offline greedy | 7.65% | 5.46% | 6.56% | **6.56%** | 8.20% → **−1.64pp** |
+| legal | offline +beam | 7.65% | 8.20% | 8.20% | 8.20% | 8.74% → −0.54pp |
+| legal | **streaming** | 7.65% | 5.46% | 6.56% | **6.56%** | 8.20% → **−1.64pp** |
+| legacy | offline greedy | 27.50% | 30.00% | 30.00% | 30.00% | 25.00% → **+5.00pp (worse)** |
+| legacy | offline +beam | 27.50% | 27.50% | 32.50% | 27.50% | 27.50% → ±0.00pp |
+| legacy | **streaming** | 27.50% | 30.00% | 30.00% | 30.00% | 25.00% → **+5.00pp (worse)** |
+
+All 27 jobs completed (legacy seed1's streaming job hit the cluster's recurring transient `CUDA-capable device(s) is/are busy or unavailable` error on first attempt and was resubmitted).
+
+Streaming latency (3-seed medians): merged TTFT-from-speech ~0.99s / word-commit lag ~1.01s; legal ~0.98s / ~1.02s; legacy ~1.04s / ~1.00s. Essentially unchanged from the non-perturbed config (~1.0s / ~0.92-0.95s) — marginally higher lag, but within the run-to-run spread seen all investigation. **Speed perturbation is a training-time augmentation only; it costs nothing at inference.**
+
+**Streaming equals offline greedy exactly on all 9 domain×seed pairs**, holding the pattern unbroken across every config tested in this investigation.
+
+**The merged win generalizes to legal, and then some — but legacy regresses hard.** Legal's 6.56% median (and 5.46% best seed) is by a wide margin the best cross-domain number Nemotron has produced anywhere here, beating the previous best median by 1.64pp. Legacy moves the opposite way by 5.00pp, well outside anything attributable to noise on the other domains.
+
+This is the *same directional tradeoff as more epochs*, just larger: every change that has helped merged and legal in this investigation has hurt legacy, monotonically (legacy across 120/180/210/210+perturb: 20.00% → 22.50% → 25.00% → 30.00%). Two readings, not distinguished here: legacy's N=10 test set is simply too small to trust, or merged-domain training genuinely drifts away from legacy's acoustics as it gets better at the other two. Worth noting speed perturbation makes this a *bigger* effect than the entire 120→210 epoch sweep did, which mildly favors the second reading.
+
+**Beam decode is now uniformly not worth it.** It loses to greedy on merged (11.66% vs 10.76%) and legal (8.20% vs 6.56%), and only "wins" on legacy (27.50% vs 30.00%) — the one domain where greedy regressed. On seed1 beam produced *byte-identical* output to greedy on all three domains (verified: the override engaged — `decoding override: strategy=maes beam_size=8` — and beam's RTF was 1.5-2× greedy's, so it did real work and simply converged on greedy's hypotheses). Beam remains unusable in the streaming path regardless (see above), so this is a ceiling-reference column only.
+
+**Verdict: epochs=210 + speed perturbation is the best config for merged and legal, and the worst tested for legacy.** If legacy matters, this config is the wrong choice — see the config file's `known_gaps`.
 
 ## Differential decoder/joint learning rate (2026-07-24): negative result
 
@@ -109,6 +137,30 @@ Single-seed screen, epochs=70, merged, offline greedy: confirmed the differentia
 **Result: WER = 28.25%.** Not competitive — worse than every other config in this investigation, including the epoch sweep's early points (90 epochs at flat LR=1e-4 gave 20.63%; see epoch sweep table above). Most likely explanation: this recipe pairs a much lower base LR with far fewer epochs than this dataset/recipe needs to converge — our own sweep showed WER still improving meaningfully all the way through 180-210 epochs at the higher flat LR (1e-4), so 70 epochs at 1/4 that LR is plausibly still underfit rather than exposing a real problem with the differential-LR idea itself. Not investigated further (e.g., a longer differential-LR run wasn't tried) since the epoch-sweep-derived configs (210, or 210+speed-perturbation) already clearly dominate at every checked point in this direction.
 
 This closes the open item as "tried, did not beat the epoch-sweep-derived config" — not as "differential LR doesn't work," since the low LR/short epoch count together confound the comparison.
+
+## Training wall-clock: where the time actually goes (2026-07-24)
+
+Speed perturbation roughly doubled training time, which made the long-standing "why is GPU utilization so low" question worth actually profiling instead of guessing. Earlier attempts had assumed batch compute was the issue; raising batch size 2→4 (same effective batch) improved per-step throughput ~2.2× but barely moved epochs/minute, which ruled that out and pointed at fixed per-epoch overhead.
+
+Measured on the cluster:
+
+| Quantity | Value |
+|---|---|
+| `/scratch` sustained write throughput (`dd`, `oflag=direct`, 2GB) | **171 MB/s** |
+| Lightning resume checkpoint (`.ckpt`) | **7.0 GB** → ~41s/write |
+| `SaveBestWER` checkpoint (`.nemo`) | **2.4 GB** → ~14s/write |
+| Training compute per epoch (157 steps @ ~5.8 it/s) | **~27s** |
+| Validation pass (20 batches @ ~11 it/s) | ~2s |
+
+The `.ckpt` is 3× the model size because it carries Adam's two moment tensors per parameter alongside the weights. Lightning writes it **every validation epoch**, and `SaveBestWER` adds its 2.4GB whenever `val_wer` improves — 25 times in the first 72 epochs of one run, i.e. most early epochs.
+
+**So a single epoch's checkpoint I/O (~41-55s) exceeds that epoch's entire training compute (~27s).** Validation itself is nearly free; it's the writes it *triggers* that dominate. That is a sufficient explanation for the bursty 0-50% GPU utilization observed all investigation, and for why the cluster's utilization monitor kept cancelling these jobs.
+
+Two levers added to `nemotron_finetune.py`, both defaulting to `1` (previous behavior):
+- `--val-every-n-epochs N` — fewer validation passes, and therefore fewer `.nemo` writes. Costs checkpoint-selection granularity (N=3 over 210 epochs → 70 candidates instead of 210).
+- `--ckpt-every-n-epochs N` — replaces Lightning's implicit every-validation-epoch `ModelCheckpoint` with an explicit less frequent one. This write is *pure resume insurance*, not the deliverable, so the only cost is that a cluster cancellation loses up to N epochs of progress.
+
+A 4-arm A/B (40 epochs, speed perturbation on, seed 1 — arms: val1/ckpt1 baseline, val3/ckpt1, val1/ckpt5, val3/ckpt5) was submitted to quantify each lever separately before changing any defaults. **It had not started after ~1.5h of cluster contention, so the defaults remain at `1` — unmeasured.** The profiling above is direct measurement and stands on its own, but the actual end-to-end speedup is not yet confirmed; the `.ckpt` write could be partly absorbed by page cache / async writeback rather than stalling training synchronously. Do not adopt non-default values on the strength of the arithmetic alone.
 
 ## Split comparison: same recipe, different legacy result
 
@@ -148,5 +200,5 @@ Checkpoints on cluster: `/scratch/pa2753/experiments/nemotron_asr/nemotron_fullf
 - Epoch sweep stopped at 210 as a practical/cost tradeoff, not because 240 was shown worse — 240 actually ties or marginally beats 210 on merged (see "210 vs 240" above), but was never given the full cross-domain/streaming/beam battery. If a tighter epochs=240 characterization is ever needed, that battery (27 more eval jobs) is the next step, not more training.
 - This file's results are not yet reflected in `README.md`'s leaderboard tables (which currently cite epochs=90 ad-hoc-split numbers as the Nemotron entry).
 - LoRA restore bug (unrelated to this file's investigation, carried over from earlier work) remains unresolved.
-- **Speed perturbation + epochs=210 is the new best merged-domain config (10.76% median) but has no cross-domain/streaming/beam battery yet** — the same 27-job battery epochs=120/180/210 (non-perturbed) all received. Until that runs, don't treat this as a confirmed replacement for the plain epochs=210 config in cross-domain or streaming/latency contexts, only for merged offline WER.
-- A `check_val_every_n_epoch`-style reduction in validation frequency was identified (2026-07-22) as the most promising remaining wall-clock lever — at this dataset size (314 train examples), fixed per-epoch overhead (validation pass, checkpoint bookkeeping) dominates over raw batch compute, so bigger batch sizes barely moved epochs/minute in a scouting test. Not implemented or tested. Would help most with speed perturbation's now-doubled training time.
+- **Legacy regressed 5pp under speed perturbation** (25.00% → 30.00% median) while merged and legal improved. Every change that has helped merged/legal in this investigation has hurt legacy monotonically (120/180/210/210+perturb: 20.00/22.50/25.00/30.00%), and speed perturbation moved it more than the entire epoch sweep did. Unresolved whether this is legacy's N=10 test set being untrustworthy or genuine drift away from legacy acoustics — see "Split comparison" below. Blocks recommending 210+perturb unconditionally.
+- Training-speed levers `--val-every-n-epochs` / `--ckpt-every-n-epochs` are implemented and the underlying bottleneck is now measured (checkpoint I/O exceeds per-epoch training compute — see "Training wall-clock" above), but the 4-arm A/B quantifying each lever never got off the queue. Defaults left at `1`. Re-run the A/B before changing them.
