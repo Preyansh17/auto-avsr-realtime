@@ -100,6 +100,16 @@ Training cost roughly doubled: speed perturbation's per-sample resampling adds r
 
 **Not yet done:** the full cross-domain/streaming/beam battery (legal, legacy, beam decode, streaming latency) that 120/180/210 (non-perturbed) all received. Val WER at the selected checkpoint hasn't been pulled either. Until that battery runs, this is confirmed as the best *merged-domain offline* number, not yet confirmed as the best *overall* config the way plain epochs=210 was.
 
+## Differential decoder/joint learning rate (2026-07-24): negative result
+
+A reference config surfaced from outside this repo (base LR ~2.5e-5, decoder+joint at ×0.2 of that, weight-decay 0.01, ~70 epochs, batch 4×accum2) was a long-standing open item — `nemotron_finetune.py` only ever supported one flat LR for the whole model. Implemented via NeMo's native `model.cfg.optim_param_groups` mechanism (a documented `ModelPT` extension point, not a private API — `setup_optimizer_param_groups()` reads a dict keyed by top-level model attribute name, e.g. `"decoder"`/`"joint"`, each carrying per-group optimizer kwargs like `lr`; unlisted params fall back to the top-level `optim.lr`). Added `--decoder-joint-lr-scale` (default `1.0` = disabled) to `nemotron_finetune.py`, plus `WEIGHT_DECAY` and `DECODER_JOINT_LR_SCALE` env var passthroughs in `nemotron_finetune.sbatch` (`WEIGHT_DECAY` wasn't wired at all before this — every prior run used the script's `1e-3` default regardless of intent).
+
+Single-seed screen, epochs=70, merged, offline greedy: confirmed the differential LR engaged correctly (log: `Differential LR: encoder/other @ lr=2.5e-05, decoder+joint @ lr=5e-06`), no errors, clean completion in 36 minutes (no cluster-cancellation risk at this epoch count).
+
+**Result: WER = 28.25%.** Not competitive — worse than every other config in this investigation, including the epoch sweep's early points (90 epochs at flat LR=1e-4 gave 20.63%; see epoch sweep table above). Most likely explanation: this recipe pairs a much lower base LR with far fewer epochs than this dataset/recipe needs to converge — our own sweep showed WER still improving meaningfully all the way through 180-210 epochs at the higher flat LR (1e-4), so 70 epochs at 1/4 that LR is plausibly still underfit rather than exposing a real problem with the differential-LR idea itself. Not investigated further (e.g., a longer differential-LR run wasn't tried) since the epoch-sweep-derived configs (210, or 210+speed-perturbation) already clearly dominate at every checked point in this direction.
+
+This closes the open item as "tried, did not beat the epoch-sweep-derived config" — not as "differential LR doesn't work," since the low LR/short epoch count together confound the comparison.
+
 ## Split comparison: same recipe, different legacy result
 
 | | Ad-hoc split (legacy) | split_v1 (legacy) |
@@ -133,7 +143,7 @@ Checkpoints on cluster: `/scratch/pa2753/experiments/nemotron_asr/nemotron_fullf
 
 ## Open items
 
-- A differential decoder/joint learning-rate recipe (base LR ~2.5e-5, decoder/joint at ×0.2 of that, weight-decay 0.01, ~70 epochs) was surfaced as a reference config from outside this repo — not implemented here (`nemotron_finetune.py` only supports one flat LR for the whole model currently) and not compared against the flat-LR sweep above. Worth trying: it uses a much lower base LR and a shorter epoch count than anything swept here, so it isn't a strict subset of this sweep's search space.
+- ~~Differential decoder/joint LR recipe never implemented~~ — implemented and tried 2026-07-24 (`--decoder-joint-lr-scale`, see "Differential decoder/joint learning rate" above): 28.25% WER, not competitive. Confounded by low LR + short epoch count, not a clean test of the differential-LR idea itself — worth retrying with more epochs at this LR if the underlying idea (not just this exact reference recipe) is still of interest.
 - Legacy's split-dependent divergence (13.5% ad-hoc vs 20.0-25.0% split_v1) unexplained, and legacy now *monotonically* worsens as epoch count increases (120→180→210: 20.0%→22.5%→25.0%) — worth a closer look if legacy performance matters for deployment. Root cause not investigated (candidate hypotheses: legacy's small N=10 test set is just noisier, or the merged-domain training distribution increasingly overfits away from legacy's specific acoustic/linguistic characteristics as training progresses).
 - Epoch sweep stopped at 210 as a practical/cost tradeoff, not because 240 was shown worse — 240 actually ties or marginally beats 210 on merged (see "210 vs 240" above), but was never given the full cross-domain/streaming/beam battery. If a tighter epochs=240 characterization is ever needed, that battery (27 more eval jobs) is the next step, not more training.
 - This file's results are not yet reflected in `README.md`'s leaderboard tables (which currently cite epochs=90 ad-hoc-split numbers as the Nemotron entry).

@@ -46,6 +46,7 @@ export EXP_DIR="${EXP_DIR:-/scratch/pa2753/experiments/nemotron_asr}"
 export EXP_NAME="${EXP_NAME:-nemotron_${DATASET_TAG}_j${SLURM_JOB_ID:-noslurm}}"
 export EPOCHS="${EPOCHS:-30}"
 export LEARNING_RATE="${LEARNING_RATE:-1e-4}"
+export WEIGHT_DECAY="${WEIGHT_DECAY:-1e-3}"
 export BATCH_SIZE="${BATCH_SIZE:-4}"
 export GRAD_ACCUM="${GRAD_ACCUM:-2}"
 export PRECISION="${PRECISION:-bf16-mixed}"
@@ -59,6 +60,7 @@ export SEED="${SEED:-}"           # set an int for reproducible runs
 export NUM_WORKERS="${NUM_WORKERS:-2}"
 export RESUME_CKPT="${RESUME_CKPT:-}"  # PTL .ckpt path to resume optimizer/scheduler/epoch state from
 export SPEED_PERTURB="${SPEED_PERTURB:-0}"
+export DECODER_JOINT_LR_SCALE="${DECODER_JOINT_LR_SCALE:-1.0}"  # e.g. 0.2 -> decoder+joint LR = LEARNING_RATE*0.2; 1.0 = disabled (flat LR)
 export HF_HOME="${HF_HOME:-/scratch/${USER}/.huggingface}"
 export TMPDIR="${TMPDIR:-/scratch/${USER}/.tmp}"
 mkdir -p "${TMPDIR}"
@@ -128,6 +130,8 @@ fi
   --output-dir "${OUT}" \
   --epochs "${EPOCHS}" \
   --learning-rate "${LEARNING_RATE}" \
+  --weight-decay "${WEIGHT_DECAY}" \
+  --decoder-joint-lr-scale "${DECODER_JOINT_LR_SCALE}" \
   --batch-size "${BATCH_SIZE}" \
   --grad-accum "${GRAD_ACCUM}" \
   --precision "${PRECISION}" \

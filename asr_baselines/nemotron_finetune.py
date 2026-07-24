@@ -42,6 +42,12 @@ def parse_args():
     p.add_argument("--learning-rate", type=float, default=1e-4)
     p.add_argument("--warmup-steps", type=int, default=200)
     p.add_argument("--weight-decay", type=float, default=1e-3)
+    p.add_argument("--decoder-joint-lr-scale", type=float, default=1.0,
+                   help="scale factor applied to --learning-rate for the "
+                        "decoder+joint param group only (encoder and "
+                        "everything else keeps the base LR); 1.0 = disabled, "
+                        "single flat LR for the whole model (default). Uses "
+                        "NeMo's native model.cfg.optim_param_groups mechanism.")
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--max-duration", type=float, default=20.0)
@@ -345,6 +351,24 @@ def main():
         if "sched" in model.cfg.optim and model.cfg.optim.sched is not None:
             model.cfg.optim.sched.warmup_steps = args.warmup_steps
             model.cfg.optim.sched.max_steps = max_steps
+        # Differential decoder/joint LR: NeMo's ModelPT.setup_optimizer_param_groups
+        # (called internally by setup_optimization) natively reads
+        # cfg.optim_param_groups -- a dict keyed by top-level model attribute
+        # name (must match e.g. "decoder"/"joint" exactly, matched by
+        # named_parameters() prefix), each value a dict of per-group optimizer
+        # kwargs (lr, weight_decay, etc). Unlisted params (encoder + anything
+        # else) fall back to the top-level optim.lr set above. No monkeypatch
+        # needed -- this is the documented extension point, not a private API.
+        if args.decoder_joint_lr_scale != 1.0:
+            decoder_joint_lr = args.learning_rate * args.decoder_joint_lr_scale
+            model.cfg.optim_param_groups = {
+                "decoder": {"lr": decoder_joint_lr},
+                "joint": {"lr": decoder_joint_lr},
+            }
+    if args.decoder_joint_lr_scale != 1.0:
+        print(f"Differential LR: encoder/other @ lr={args.learning_rate}, "
+              f"decoder+joint @ lr={args.learning_rate * args.decoder_joint_lr_scale} "
+              f"(scale={args.decoder_joint_lr_scale})")
     model.setup_optimization(model.cfg.optim)
     print(f"train examples={num_train_examples} steps_per_epoch={steps_per_epoch} max_steps={max_steps}")
 
