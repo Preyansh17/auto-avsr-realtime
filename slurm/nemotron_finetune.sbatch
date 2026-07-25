@@ -61,8 +61,8 @@ export NUM_WORKERS="${NUM_WORKERS:-2}"
 export RESUME_CKPT="${RESUME_CKPT:-}"  # PTL .ckpt path to resume optimizer/scheduler/epoch state from
 export SPEED_PERTURB="${SPEED_PERTURB:-0}"
 export DECODER_JOINT_LR_SCALE="${DECODER_JOINT_LR_SCALE:-1.0}"  # e.g. 0.2 -> decoder+joint LR = LEARNING_RATE*0.2; 1.0 = disabled (flat LR)
-export VAL_EVERY_N_EPOCHS="${VAL_EVERY_N_EPOCHS:-1}"    # >1 cuts validation passes and the best-checkpoint (.nemo, 2.4GB) writes they trigger; costs selection granularity
-export CKPT_EVERY_N_EPOCHS="${CKPT_EVERY_N_EPOCHS:-1}"  # >1 cuts the ~7GB resume-checkpoint write frequency (biggest wall-clock lever); a cancellation then loses up to N epochs
+export VAL_EVERY_N_EPOCHS="${VAL_EVERY_N_EPOCHS:-1}"    # left at 1: A/B showed validation passes are nearly free (~2s); raising it costs best-checkpoint selection granularity for little gain
+export CKPT_EVERY_N_EPOCHS="${CKPT_EVERY_N_EPOCHS:-5}"  # 5 measured ~18% faster (the ~7GB .ckpt write is the dominant fixed per-epoch cost). No quality cost -- SaveBestWER still writes .nemo every epoch, so best-checkpoint selection is unaffected; only exposure is that a cluster cancellation loses up to 5 epochs (~7min)
 export HF_HOME="${HF_HOME:-/scratch/${USER}/.huggingface}"
 export TMPDIR="${TMPDIR:-/scratch/${USER}/.tmp}"
 mkdir -p "${TMPDIR}"

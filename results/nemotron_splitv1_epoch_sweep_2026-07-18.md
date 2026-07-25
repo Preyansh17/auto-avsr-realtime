@@ -160,7 +160,36 @@ Two levers added to `nemotron_finetune.py`, both defaulting to `1` (previous beh
 - `--val-every-n-epochs N` — fewer validation passes, and therefore fewer `.nemo` writes. Costs checkpoint-selection granularity (N=3 over 210 epochs → 70 candidates instead of 210).
 - `--ckpt-every-n-epochs N` — replaces Lightning's implicit every-validation-epoch `ModelCheckpoint` with an explicit less frequent one. This write is *pure resume insurance*, not the deliverable, so the only cost is that a cluster cancellation loses up to N epochs of progress.
 
-A 4-arm A/B (40 epochs, speed perturbation on, seed 1 — arms: val1/ckpt1 baseline, val3/ckpt1, val1/ckpt5, val3/ckpt5) was submitted to quantify each lever separately before changing any defaults. **It had not started after ~1.5h of cluster contention, so the defaults remain at `1` — unmeasured.** The profiling above is direct measurement and stands on its own, but the actual end-to-end speedup is not yet confirmed; the `.ckpt` write could be partly absorbed by page cache / async writeback rather than stalling training synchronously. Do not adopt non-default values on the strength of the arithmetic alone.
+### Partition routing (operational finding, 2026-07-24)
+
+The A/B initially sat PENDING for over 1.5 hours and reported a start estimate more than a day out. Cause was not fairshare but **partition routing**: `--account=torch_pr_39_general` routes to `l40s_public`/`h200_public`, public partitions carrying 377 and 643 pending jobs respectively, while `--account=torch_pr_39_tandon_advanced` routes to the group's dedicated `a100_tandon`, where the same job sat only 17 deep. Resubmitting there started the arms within the hour.
+
+**Account fairshare governs priority *within* a partition; partition access governs whether you are queuing against the whole university.** A fairshare snapshot alone (`sshare -l`) is misleading here — on 2026-07-24 it favored `general` (LevelFS 9.77 vs 1.81), which is exactly the account that stalled. Check partition depth too:
+
+```
+for p in l40s_public h200_public a100_tandon; do echo "$p: running=$(squeue -h -p $p -t RUNNING | wc -l) pending=$(squeue -h -p $p -t PENDING | wc -l)"; done
+```
+
+Two related notes: `squeue --start` returns an identical scheduler-horizon placeholder for every job here and should not be trusted — compare your priority against the pending queue's distribution instead. And shorter `--time` backfills far more easily: the 20-minute eval jobs cleared quickly while the training arms inheriting the sbatch's 6-hour default stalled (cut to 2h).
+
+### A/B result (40 epochs, speed perturbation on, seed 1)
+
+| Arm | val / ckpt every | Node | Elapsed | Speedup vs A | WER | `.nemo` writes |
+|---|---|---|---|---|---|---|
+| A (baseline) | 1 / 1 | gh007 (H100) | 55:40 | — | 20.63% | 17 |
+| B | 3 / 1 | gh010 (H100) | 46:52 | 15.8% | 19.73% | 8 |
+| C | 1 / 5 | gh002 (H100) | 45:46 | **17.8%** | 13.45% | 21 |
+| D | 3 / 5 | ga002 (**A100**) | — | *excluded* | — | — |
+
+**Arm D is excluded from the comparison: it landed on an A100 while A/B/C all ran on H100s.** Its wall-clock is not comparable to the others, and its mid-flight rate (slower than baseline despite having both levers on) is explained by GPU model, not by the levers. Worth remembering for any future timing experiment on this cluster — SLURM will happily mix GPU generations across arms unless the partition or a `--constraint` pins them.
+
+**The checkpoint-I/O hypothesis is confirmed, but the magnitude was overestimated.** Arm C is the clean isolation: it validated every epoch and made *more* `.nemo` writes than baseline (21 vs 17), so the only thing it changed was writing the 7GB `.ckpt` 5× less often — and it was the fastest arm. However, 32 fewer writes at the naive 41s each would predict 21.9 min saved; the actual saving was 9.9 min, implying **~18.6s effective per write, about 45% of the naive figure**. So the write is real and dominant among fixed costs, but partly absorbed by page cache / async writeback rather than fully stalling training.
+
+Arm B ≈ arm C says validation passes themselves are nearly free. B's `val_every_n=3` also cut `.ckpt` writes 3× as a side effect (Lightning's default `ModelCheckpoint` fires at validation epoch end), so B is *not* a clean validation-only lever — most of its gain came from the same checkpoint reduction C isolates.
+
+**Caveat: n=1 per arm.** The ~18% effect is well clear of plausible variance between identical H100 nodes, but this was not repeated. The WER column is not meaningful here — at 40 epochs the model is heavily undertrained (13-21% vs 10.76% at 210 epochs) and the spread across arms is run-to-run noise, not a lever effect. The only quality claim supported is that neither lever *hurt*.
+
+**Default adopted: `CKPT_EVERY_N_EPOCHS=5`, `VAL_EVERY_N_EPOCHS=1`.** The checkpoint lever carries essentially no quality cost — `SaveBestWER`'s `.nemo` still fires at full per-epoch granularity, so best-checkpoint selection is unaffected; the only exposure is that a cluster cancellation loses up to 5 epochs (~7 min), against ~10 min saved per 40 epochs. Validation frequency is left at 1 because its marginal benefit over the checkpoint lever alone is unclear and it *does* cost selection granularity.
 
 ## Split comparison: same recipe, different legacy result
 
