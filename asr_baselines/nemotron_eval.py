@@ -25,6 +25,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from asr_baselines.metrics import compute_wer_cer  # noqa: E402
+from asr_baselines.nemotron_restore import restore_asr_model  # noqa: E402
 
 
 def read_manifest(path):
@@ -54,10 +55,9 @@ def main():
     import nemo.collections.asr as nemo_asr
     from omegaconf import open_dict
 
-    if args.model.endswith(".nemo") and os.path.isfile(args.model):
-        model = nemo_asr.models.ASRModel.restore_from(args.model)
-    else:
-        model = nemo_asr.models.ASRModel.from_pretrained(args.model)
+    # Handles adapter/LoRA checkpoints, which NeMo's plain restore_from()
+    # cannot load -- see asr_baselines/nemotron_restore.py for the root cause.
+    model = restore_asr_model(args.model)
     model.eval()
 
     if args.decoding:
