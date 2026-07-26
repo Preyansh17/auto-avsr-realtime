@@ -40,6 +40,15 @@ if [[ -z "${RUN_DATA_MODE:-}" ]]; then
   fi
 fi
 
+# A caller-supplied ROOT_DIR is honoured as an override, matching how
+# TRAIN_FILE/VAL_FILE/TEST_FILE already behave. Previously every branch below
+# clobbered it unconditionally, so passing ROOT_DIR= via --export silently did
+# nothing -- harmless for split_v1 only because that root's symlinks happen to
+# point at the same source dirs as MERGED_ROOT's. Logged loudly rather than
+# silently, since an accidentally-inherited ROOT_DIR in the submitting shell
+# would now take effect.
+_ROOT_DIR_OVERRIDE="${ROOT_DIR:-}"
+
 case "${RUN_DATA_MODE}" in
   legal_only)
     ROOT_DIR="${LEGAL_ROOT}"
@@ -96,6 +105,12 @@ esac
 for f in "${RAW_TRAIN_FILE}" "${RAW_VAL_FILE}"; do
   [[ -s "${f}" ]] || { echo "[FATAL] Missing label CSV: ${f}" >&2; exit 4; }
 done
+
+if [[ -n "${_ROOT_DIR_OVERRIDE}" && "${_ROOT_DIR_OVERRIDE}" != "${ROOT_DIR}" ]]; then
+  echo "[_patient_data] ROOT_DIR overridden by caller: ${ROOT_DIR} -> ${_ROOT_DIR_OVERRIDE}"
+  ROOT_DIR="${_ROOT_DIR_OVERRIDE}"
+fi
+unset _ROOT_DIR_OVERRIDE
 
 # Optional: point media at a different crop of the SAME split (e.g. face crops
 # produced by scripts/face_crop_patient.py) while keeping the original labels.

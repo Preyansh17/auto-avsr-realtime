@@ -132,6 +132,14 @@ def make_save_best_wer_callback(out_path):
     trainer.callback_metrics (untested plumbing on this NeMo version),
     best_wer stays inf and the caller's fallback (last-epoch-only) kicks in
     -- printed clearly, not a silent no-op.
+
+    best_wer is persisted via Lightning's callback state hooks. Without that
+    it is a plain Python attribute that resets to inf on --resume-ckpt, so the
+    first post-resume validation epoch unconditionally overwrites a good
+    nemotron_best.nemo with whatever that epoch produced, even if worse. That
+    bit this project repeatedly during the 2026-07-21/24 cluster-cancellation
+    resumes and had to be worked around by hand-copying the .nemo before every
+    resume; state_dict/load_state_dict makes the workaround unnecessary.
     """
     from lightning.pytorch import Callback
 
@@ -139,6 +147,14 @@ def make_save_best_wer_callback(out_path):
         def __init__(self):
             self.out_path = out_path
             self.best_wer = float("inf")
+
+        def state_dict(self):
+            return {"best_wer": self.best_wer}
+
+        def load_state_dict(self, state_dict):
+            self.best_wer = state_dict.get("best_wer", float("inf"))
+            print(f"[resume] SaveBestWER restored best_wer={self.best_wer:.4f} "
+                  f"-- will only overwrite {self.out_path} on a genuine improvement")
 
         def on_validation_epoch_end(self, trainer, pl_module):
             wer = trainer.callback_metrics.get("val_wer")
