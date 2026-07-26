@@ -116,7 +116,8 @@ Two things worth noting. First, at 1.2s the offline→streaming gap is only **1.
 | Whisper medium + SpecAugment, full finetune | offline | 9.8% | 2.6% |
 | AV Emformer, audio-only, LoRA (streaming-selected) | streaming | 26.8% | — |
 | Nemotron, full finetune (30 epochs, untuned default), cache-aware streaming decode | streaming | 33.3% | 32.2% |
-| **Nemotron, full finetune (90 epochs, swept), cache-aware streaming decode** | streaming | **19.7%** | **18.6%** |
+| Nemotron, full finetune (90 epochs, swept), cache-aware streaming decode | streaming | 19.7% | 18.6% |
+| *(both Nemotron rows are ad-hoc-split and superseded — see the 2026-07-19 and 2026-07-24 updates below for split_v1 numbers)* | | | |
 | AV Emformer, audio-visual, LoRA (streaming-selected) | streaming | 36.6% | — |
 
 **Update (2026-07-17): Nemotron's 30-epoch number above was the untuned `--epochs 30`
@@ -148,6 +149,34 @@ confirmed so far; cross-domain/streaming/beam not yet rerun on it. Full writeup,
 including the exact best-config hyperparameters, in
 `results/nemotron_splitv1_epoch_sweep_2026-07-18.md`.
 
+**Update (2026-07-24): epochs=180 is superseded. Current best Nemotron config is
+epochs=210 + speed perturbation** — merged 10.76%, legal **6.56%**, legacy 30.00%
+(3-seed medians, streaming, split_v1, merged-trained and evaluated cross-domain).
+Legal at 6.56% (best seed 5.46%) is the best cross-domain number this investigation
+has produced. The epoch sweep was pushed to 210 and 240, which tie on merged median
+(11.21% each, both beating 180's 12.11%); 210 was taken as the stopping point on
+cost/risk grounds rather than because 240 was shown worse. Speed perturbation
+(NeMo's native `train_ds.perturb_speed`) was then worth a further ~0.45pp on merged
+and ~1.64pp on legal, beating its non-perturbed counterpart on all three seeds
+individually — but it **regresses legacy by 5pp**, so it is not an unconditional
+recommendation.
+
+**The legacy caveat is the one to read before quoting any of this.** Legacy has
+worsened monotonically at every step that improved the other two domains
+(120/180/210/210+perturb: 20.0% → 22.5% → 25.0% → 30.0%), and speed perturbation
+moved it further than the entire epoch sweep did. Whether that is a genuine
+merged-training drift away from legacy acoustics or simply an untrustworthy 10-clip
+test set is unresolved. If legacy accuracy matters, use epochs=180 without speed
+perturbation (legacy 22.50%, the best of any config tested) and accept worse merged
+and legal.
+
+Also settled since: streaming WER equals offline greedy WER **exactly** on every
+domain/seed pair across every config in this investigation — chunked cache-aware
+decode costs Nemotron nothing in accuracy. Beam decode now loses to greedy on merged
+and legal (and remains impossible in the streaming path regardless). A differential
+decoder/joint LR recipe was implemented and tried at 28.25% WER — not competitive,
+though confounded by pairing a low LR with a short epoch count.
+
 Streaming latency, all measured via simulated real-time (chunk k's audio only
 exists at (k+1)*chunk_duration seconds, matching a live deployment):
 
@@ -155,7 +184,13 @@ exists at (k+1)*chunk_duration seconds, matching a live deployment):
 | --- | --- | --- | --- | --- |
 | Whisper streaming (1.2s chunks) | 0.18-0.20 | ~200-217 | 2.6s | 1.8-1.9s |
 | Whisper streaming (0.6s chunks) | 0.30-0.31 | ~170-180 | 2.0s | 1.5-1.7s |
-| Nemotron streaming | 0.019-0.026 | 19-26 | 2.2-3.3s | unavailable* |
+| Nemotron streaming | 0.019-0.026 | 19-26 | 2.2-3.3s (≈1.0s from speech onset†) | ≈0.9-1.0s† |
+
+†Measured since via `nemotron_streaming_eval.py --word-lag` across all split_v1
+configs. The 2.2-3.3s TTFT figure is anchored at stream start and so includes each
+clip's leading silence; anchored at the first word's own speech onset it is ~1.0s.
+Word-commit lag is ~0.9-1.0s and is flat across epoch counts and with/without speed
+perturbation — epoch count and augmentation move WER, not latency.
 
 *Nemotron word-level timestamps hit a NeMo library bug on the eval script this was
 first measured with: `compute_timestamps=True` crashes cache-aware streaming's
