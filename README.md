@@ -161,14 +161,14 @@ and ~1.64pp on legal, beating its non-perturbed counterpart on all three seeds
 individually — but it **regresses legacy by 5pp**, so it is not an unconditional
 recommendation.
 
-**The legacy caveat is the one to read before quoting any of this.** Legacy has
-worsened monotonically at every step that improved the other two domains
-(120/180/210/210+perturb: 20.0% → 22.5% → 25.0% → 30.0%), and speed perturbation
-moved it further than the entire epoch sweep did. Whether that is a genuine
-merged-training drift away from legacy acoustics or simply an untrustworthy 10-clip
-test set is unresolved. If legacy accuracy matters, use epochs=180 without speed
-perturbation (legacy 22.50%, the best of any config tested) and accept worse merged
-and legal.
+Legacy trends the other way — it has worsened at every step that improved the other
+two domains (120/180/210/210+perturb: 20.0% → 22.5% → 25.0% → 30.0%). **Decided
+2026-07-24 not to chase this: legacy's test set is 10 clips / ~40 words, so one word
+is 2.5pp and that entire 10pp span is four words.** No re-analysis of the same ten
+clips can separate a real effect from which handful of utterances landed in the
+sample; it would need a bigger legacy test set, which is a data-collection question
+rather than a modeling one. Treat legacy as not decision-relevant when choosing
+between these configs and pick on merged (N=40) and legal (N=30), which move together.
 
 Also settled since: streaming WER equals offline greedy WER **exactly** on every
 domain/seed pair across every config in this investigation — chunked cache-aware

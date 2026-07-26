@@ -122,11 +122,15 @@ Streaming latency (3-seed medians): merged TTFT-from-speech ~0.99s / word-commit
 
 **The merged win generalizes to legal, and then some — but legacy regresses hard.** Legal's 6.56% median (and 5.46% best seed) is by a wide margin the best cross-domain number Nemotron has produced anywhere here, beating the previous best median by 1.64pp. Legacy moves the opposite way by 5.00pp, well outside anything attributable to noise on the other domains.
 
-This is the *same directional tradeoff as more epochs*, just larger: every change that has helped merged and legal in this investigation has hurt legacy, monotonically (legacy across 120/180/210/210+perturb: 20.00% → 22.50% → 25.00% → 30.00%). Two readings, not distinguished here: legacy's N=10 test set is simply too small to trust, or merged-domain training genuinely drifts away from legacy's acoustics as it gets better at the other two. Worth noting speed perturbation makes this a *bigger* effect than the entire 120→210 epoch sweep did, which mildly favors the second reading.
+This is the *same directional tradeoff as more epochs*, just larger: every change that has helped merged and legal in this investigation has hurt legacy, monotonically (legacy across 120/180/210/210+perturb: 20.00% → 22.50% → 25.00% → 30.00%).
+
+**Decision (2026-07-24): not worth diagnosing — legacy's test set is too small to carry the claim.** It is 10 clips / ~40 words, so a single word is worth 2.5pp and a single clip is worth 10pp. The entire 20.00% → 30.00% "monotonic regression" spanning the whole investigation amounts to **four words**. A trend that clean-looking across four words is as easily an artifact of which handful of utterances happen to sit in a 10-clip sample as it is a real drift away from legacy acoustics, and no amount of re-analysis on the same 10 clips can separate those. Resolving it would need a materially larger legacy test set, which is a data-collection question, not a modeling one.
+
+Practical consequence: **legacy is not decision-relevant for choosing between these configs.** Earlier revisions of this file and the config YAML hedged "use epochs=180 if legacy matters" — that hedge is withdrawn. Pick on merged and legal, which have N=40 and N=30 and move together.
 
 **Beam decode is now uniformly not worth it.** It loses to greedy on merged (11.66% vs 10.76%) and legal (8.20% vs 6.56%), and only "wins" on legacy (27.50% vs 30.00%) — the one domain where greedy regressed. On seed1 beam produced *byte-identical* output to greedy on all three domains (verified: the override engaged — `decoding override: strategy=maes beam_size=8` — and beam's RTF was 1.5-2× greedy's, so it did real work and simply converged on greedy's hypotheses). Beam remains unusable in the streaming path regardless (see above), so this is a ceiling-reference column only.
 
-**Verdict: epochs=210 + speed perturbation is the best config for merged and legal, and the worst tested for legacy.** If legacy matters, this config is the wrong choice — see the config file's `known_gaps`.
+**Verdict: epochs=210 + speed perturbation is the best config.** It wins merged and legal, the two domains with enough test data to support a conclusion. Its legacy result is the worst tested, but see the decision above — at 10 clips / ~40 words that difference is four words and is not a basis for choosing a config.
 
 ## Differential decoder/joint learning rate (2026-07-24): negative result
 
