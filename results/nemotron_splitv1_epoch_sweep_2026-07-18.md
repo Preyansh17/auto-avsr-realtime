@@ -195,6 +195,90 @@ Arm B ≈ arm C says validation passes themselves are nearly free. B's `val_ever
 
 **Default adopted: `CKPT_EVERY_N_EPOCHS=5`, `VAL_EVERY_N_EPOCHS=1`.** The checkpoint lever carries essentially no quality cost — `SaveBestWER`'s `.nemo` still fires at full per-epoch granularity, so best-checkpoint selection is unaffected; the only exposure is that a cluster cancellation loses up to 5 epochs (~7 min), against ~10 min saved per 40 epochs. Validation frequency is left at 1 because its marginal benefit over the checkpoint lever alone is unclear and it *does* cost selection granularity.
 
+## Latency measurement: MFA ground truth vs model-predicted timestamps (2026-07-25)
+
+Every latency number above this section was measured against the *model's own*
+predicted word timestamps:
+
+```
+word_lag = emit_time - predicted_word_end
+```
+
+Both terms come from the same model, which makes the metric self-referential: if
+a checkpoint emits later, its own timestamps shift later too and the difference
+partly cancels. Montreal Forced Aligner TextGrids give a fixed external
+reference instead. All 80 split_v1 test clips already had alignments from the
+CarelessWhisper work (`/scratch/pa2753/carelesswhisper/aligned`) -- 100%
+coverage, no alignment run needed, and no coverage bias from MFA failing on
+hard clips.
+
+Implemented in `asr_baselines/mfa_timings.py`, exposed as `--mfa-aligned-dir` on
+both `nemotron_streaming_eval.py` and `whisper_streaming_eval.py`. The metric
+*definition* is unchanged (anchor = the time the word finished being spoken);
+only the *source* of the anchor changes, so old and new numbers are directly
+comparable. Hypothesis and reference are aligned by edit distance and only
+exactly-matched words are timed -- a substituted or hallucinated word has no
+acoustic onset worth measuring against.
+
+### Nemotron, epochs=210 + speed perturbation (3-seed medians)
+
+| Domain | TTFT mean (MFA / model) | Lag mean (MFA / model) | TTFT p95 (MFA / model) | Lag p95 (MFA / model) |
+|---|---|---|---|---|
+| merged | **0.80s** / 0.99s | **0.70s** / 1.02s | 1.83s / 1.10s | 1.76s / 1.36s |
+| legal | **0.85s** / 0.98s | **0.71s** / 1.02s | 1.75s / 1.09s | 1.71s / 1.36s |
+| legacy | **0.77s** / 1.04s | **0.65s** / 1.04s | 1.49s / 1.18s | 1.49s / 1.27s |
+
+Four findings, including one prediction that failed:
+
+1. **Medians got better, not worse -- the a-priori prediction was wrong.** The
+   expectation was that RNN-T's known emission delay makes its predicted
+   word-end late, and a late subtrahend shrinks measured lag, so ground truth
+   should *increase* it. It did the opposite (merged lag 1.02s -> 0.70s). MFA
+   marks a word's full acoustic extent, and on elongated dysarthric speech the
+   model frequently commits from partial evidence before the word finishes, so
+   its own anchor sits *earlier* than MFA's, not later.
+2. **Tails got worse, and that is the part that matters.** merged p95 lag
+   1.36s -> 1.76s, p95 TTFT 1.10s -> 1.83s. The self-referential metric was
+   compressing exactly the cases a user notices.
+3. **It exposed cross-checkpoint variation the old metric could not see.**
+   Seed1's MFA TTFT is 1.08-1.25s across the three domains while seeds 2-3 sit
+   at 0.63-0.85s -- a systematic ~0.4s difference in emission eagerness between
+   checkpoints trained on the same recipe. Model-referenced, all three seeds
+   read flat at ~0.95-1.16s, because a later-emitting checkpoint also produces
+   later timestamps and the difference cancels. This is the strongest argument
+   for the change: not that the old numbers were wrong, but that the old metric
+   was structurally blind to a real behavioural difference.
+4. **A supporting argument offered earlier was wrong and should not be reused.**
+   The claim was that `att_context_size=[70,13]` (13 lookahead frames x 0.08s =
+   1.04s right context) sets a floor below which measured lag cannot fall.
+   MFA-referenced mean lag is 0.65-0.93s, below it. The conclusion (the old
+   metric was flattering) held for TTFT and the tails; this particular
+   justification for it did not.
+
+### Corrected head-to-head vs Whisper (merged, 3-seed medians)
+
+Whisper large-v3 at its headline decode point (segment=1.2s, frame_threshold=18,
+8.97% merged streaming WER), same MFA reference:
+
+| Metric | Nemotron | Whisper | Nemotron advantage |
+|---|---|---|---|
+| TTFT-from-speech, mean | **0.80s** | 1.76s | 2.2x |
+| Word-commit lag, mean | **0.70s** | 1.61s | 2.3x |
+| TTFT-from-speech, p95 | **1.83s** | 2.34s | 1.3x |
+| Word-commit lag, p95 | **1.76s** | 2.54s | 1.4x |
+| RTF | **~0.02-0.03** | 0.170 | ~6-8x |
+
+**Nemotron's roughly-2x mean latency advantage survives the correction.** The
+concern that the original comparison was really comparing two different
+timestamp biases turned out to be largely unfounded: Whisper's numbers moved in
+the *same* direction and by a similar amount (TTFT 2.06s -> 1.76s, lag
+1.86s -> 1.61s), so the relative picture was already about right.
+
+The genuinely new information is the tail behaviour: at p95 the advantage
+narrows to ~1.3-1.4x, considerably less than the mean suggests, and the old
+metric hid that on both models. Quote the means for typical responsiveness and
+the p95 for worst-case, and do not present ~2x as the whole story.
+
 ## Split comparison: same recipe, different legacy result
 
 | | Ad-hoc split (legacy) | split_v1 (legacy) |

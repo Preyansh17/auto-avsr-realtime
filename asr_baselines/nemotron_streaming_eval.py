@@ -50,8 +50,11 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from asr_baselines.metrics import compute_wer_cer  # noqa: E402
+from asr_baselines.metrics import compute_wer_cer, normalize  # noqa: E402
 from asr_baselines.nemotron_restore import restore_asr_model  # noqa: E402
+from asr_baselines.mfa_timings import (  # noqa: E402
+    build_textgrid_index, ref_word_ends, match_hyp_to_ref,
+)
 
 
 def read_manifest(path):
@@ -88,6 +91,18 @@ def main():
                         "per-utterance stats -- offline transcribe() normalizes over the "
                         "FULL utterance, which peeks at future audio a true streaming "
                         "deployment can't see; this flag removes that unfairness")
+    p.add_argument("--mfa-aligned-dir", default=None,
+                   help="directory of Montreal Forced Aligner .TextGrid files. "
+                        "When set (with --word-lag), latency is ALSO reported "
+                        "against MFA ground-truth word-end times instead of the "
+                        "model's own predicted timestamps. RNN-T emission is "
+                        "delayed by construction, so the model's own timestamps "
+                        "are late and -- being the subtrahend -- make the "
+                        "measured lag look SMALLER than it is. See "
+                        "asr_baselines/mfa_timings.py.")
+    p.add_argument("--mfa-split-root", default="/scratch/th3482/LipVideoData/patient_legal298_legacy96_split_v1",
+                   help="split root stripped from audio paths to derive the "
+                        "flattened MFA utterance name")
     p.add_argument("--word-lag", action="store_true",
                    help="report per-word commit lag (word spoken -> text visible) and "
                         "TTFT, the Nemotron counterpart to whisper_streaming_eval.py's "
@@ -138,6 +153,12 @@ def main():
     ttft_sims = []             # stream start -> first text visible (includes leading silence)
     ttft_from_speech_sims = []  # first word's own end-of-speech -> its text visible
     word_lags = []             # word finished being SPOKEN -> its text visible
+    mfa_word_lags = []         # same, but anchored to MFA ground truth
+    mfa_ttft_sims = []
+    mfa_index = build_textgrid_index(args.mfa_aligned_dir) if args.mfa_aligned_dir else None
+    mfa_covered = mfa_missing = 0
+    if mfa_index is not None:
+        print(f"MFA reference: {len(mfa_index)} TextGrids indexed from {args.mfa_aligned_dir}")
 
     for it in items:
         path = it["audio_filepath"]
@@ -163,6 +184,7 @@ def main():
         audio_consumed_sec = 0.0
         prev_word_count = 0
         utt_ttft = None
+        emitted = []   # (word_text, emit_sim) in emission order, for MFA matching
 
         t0 = time.time()
         for step_num, (chunk_audio, chunk_lengths) in enumerate(streaming_buffer):
@@ -208,6 +230,7 @@ def main():
                     for w in words[prev_word_count:]:
                         word_end_sec = float(w["end_offset"]) * frame_to_sec
                         word_lags.append(emit_sim - word_end_sec)
+                        emitted.append((str(w.get("word", "")), emit_sim))
                     prev_word_count = len(words)
                     # WORKAROUND: compute_timestamps=True turns hyp.timestamp
                     # into a dict, but conformer_stream_step's carried-state
@@ -222,6 +245,25 @@ def main():
                     # every step.
                     step_hyp.timestamp = ts["timestep"]
         total_elapsed += time.time() - t0
+
+        if mfa_index is not None and emitted:
+            # Anchor to ground truth instead of the model's own (late) guess.
+            # Only exact word matches are timed: a substituted or hallucinated
+            # word has no reference onset to measure against.
+            ref_pairs = ref_word_ends(path, mfa_index, args.mfa_split_root)
+            if ref_pairs is None:
+                mfa_missing += 1
+            else:
+                mfa_covered += 1
+                hyp_norm = [normalize(w).split()[0] if normalize(w) else ""
+                            for w, _ in emitted]
+                ref_norm = [w for w, _ in ref_pairs]
+                matches = match_hyp_to_ref(hyp_norm, ref_norm)
+                for k, (hi, ri) in enumerate(matches):
+                    lag = emitted[hi][1] - ref_pairs[ri][1]
+                    mfa_word_lags.append(lag)
+                    if k == 0:
+                        mfa_ttft_sims.append(lag)
 
         hyp = transcribed_texts[0]
         hyp = hyp.text if hasattr(hyp, "text") else hyp
@@ -249,6 +291,17 @@ def main():
               f"mean {statistics.mean(ttft_from_speech_sims):.2f}s  "
               f"p50 {pctl(ttft_from_speech_sims, .5):.2f}s  "
               f"p95 {pctl(ttft_from_speech_sims, .95):.2f}s  (n={len(ttft_from_speech_sims)})")
+    if mfa_word_lags:
+        print(f"[MFA ground truth] TTFT from first word spoken: "
+              f"mean {statistics.mean(mfa_ttft_sims):.2f}s  "
+              f"p50 {pctl(mfa_ttft_sims, .5):.2f}s  "
+              f"p95 {pctl(mfa_ttft_sims, .95):.2f}s  (n={len(mfa_ttft_sims)})")
+        print(f"[MFA ground truth] word commit lag: "
+              f"mean {statistics.mean(mfa_word_lags):.2f}s  "
+              f"p50 {pctl(mfa_word_lags, .5):.2f}s  "
+              f"p95 {pctl(mfa_word_lags, .95):.2f}s  "
+              f"(n={len(mfa_word_lags)} matched words; "
+              f"{mfa_covered} clips aligned, {mfa_missing} unaligned)")
     if word_lags:
         import statistics
         print(f"word commit lag (word spoken -> text visible): "

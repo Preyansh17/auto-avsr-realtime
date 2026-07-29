@@ -184,13 +184,24 @@ exists at (k+1)*chunk_duration seconds, matching a live deployment):
 | --- | --- | --- | --- | --- |
 | Whisper streaming (1.2s chunks) | 0.18-0.20 | ~200-217 | 2.6s | 1.8-1.9s |
 | Whisper streaming (0.6s chunks) | 0.30-0.31 | ~170-180 | 2.0s | 1.5-1.7s |
-| Nemotron streaming | 0.019-0.026 | 19-26 | 2.2-3.3s (≈1.0s from speech onset†) | ≈0.9-1.0s† |
+| Nemotron streaming | 0.019-0.026 | 19-26 | 2.2-3.3s (**0.80s** from speech onset†) | **0.70s**† |
 
-†Measured since via `nemotron_streaming_eval.py --word-lag` across all split_v1
-configs. The 2.2-3.3s TTFT figure is anchored at stream start and so includes each
-clip's leading silence; anchored at the first word's own speech onset it is ~1.0s.
-Word-commit lag is ~0.9-1.0s and is flat across epoch counts and with/without speed
-perturbation — epoch count and augmentation move WER, not latency.
+†Measured via `nemotron_streaming_eval.py --word-lag`. The 2.2-3.3s TTFT figure is
+anchored at stream start and so includes each clip's leading silence; the bolded
+figures are anchored at the word's own speech onset.
+
+**Reference matters, and these bolded numbers use Montreal Forced Aligner ground
+truth (as of 2026-07-25), not the model's own predicted timestamps.** The earlier
+model-referenced figures (~1.0s TTFT, ~0.9-1.0s lag) were self-referential: a
+checkpoint that emits later also predicts later timestamps, so the difference partly
+cancels. Against MFA the merged 3-seed medians are 0.80s TTFT / 0.70s word lag —
+*better* than the old numbers, because MFA marks a word's full acoustic extent and
+the model often commits before an elongated dysarthric word finishes. The tails move
+the other way: p95 lag 1.36s → 1.76s, p95 TTFT 1.10s → 1.83s. Whisper measured on the
+same reference is 1.76s TTFT / 1.61s lag (its own model-referenced figures were 2.06s
+/ 1.86s), so Nemotron's ~2x mean advantage survives — but narrows to ~1.3-1.4x at
+p95. Full methodology and the four findings, including one prediction that failed, in
+`results/nemotron_splitv1_epoch_sweep_2026-07-18.md`.
 
 *Nemotron word-level timestamps hit a NeMo library bug on the eval script this was
 first measured with: `compute_timestamps=True` crashes cache-aware streaming's

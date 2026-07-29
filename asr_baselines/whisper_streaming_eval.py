@@ -43,7 +43,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from asr_baselines.metrics import compute_wer_cer  # noqa: E402
+from asr_baselines.metrics import compute_wer_cer, normalize  # noqa: E402
+from asr_baselines.mfa_timings import (  # noqa: E402
+    build_textgrid_index, ref_word_ends, match_hyp_to_ref,
+)
 
 
 def read_manifest_tsv(path):
@@ -73,6 +76,8 @@ def main():
     p.add_argument("--beams", type=int, default=1)
     p.add_argument("--language", default="en")
     p.add_argument("--task", default="transcribe")
+    p.add_argument("--mfa-aligned-dir", default=None)
+    p.add_argument("--mfa-split-root", default="/scratch/th3482/LipVideoData/patient_legal298_legacy96_split_v1")
     args = p.parse_args()
 
     sys.path.insert(0, args.simulstreaming_dir)
@@ -116,6 +121,12 @@ def main():
     ttft_sims = []           # stream start -> first text visible (includes leading silence)
     ttft_from_speech_sims = []  # first word's own end-of-speech -> its text visible
     word_lags = []           # word finished being SPOKEN -> its text visible (all words)
+    mfa_word_lags = []       # same, anchored to MFA ground truth instead
+    mfa_ttft_sims = []
+    mfa_index = build_textgrid_index(args.mfa_aligned_dir) if getattr(args, "mfa_aligned_dir", None) else None
+    mfa_covered = mfa_missing = 0
+    if mfa_index is not None:
+        print(f"MFA reference: {len(mfa_index)} TextGrids indexed from {args.mfa_aligned_dir}")
 
     for it in items:
         # Label CSV paths point at the lip-crop mp4s, which are VIDEO-ONLY;
@@ -128,6 +139,7 @@ def main():
         online.init()  # fresh stream: resets audio buffer, decoder context, KV state
         pieces = []
         utt_ttft = None
+        emitted = []   # (word_text, emit_sim) for MFA matching
         t0 = time.time()
         for k, off in enumerate(range(0, len(audio), seg_samples)):
             chunk = audio[off:off + seg_samples]
@@ -153,7 +165,23 @@ def main():
                         ttft_from_speech_sims.append(emit_sim - words[0]["end"])
                 for w in words:
                     word_lags.append(emit_sim - w["end"])
+                    emitted.append((str(w.get("word", w.get("text", ""))), emit_sim))
         total_elapsed += time.time() - t0
+
+        if mfa_index is not None and emitted:
+            ref_pairs = ref_word_ends(wav_path, mfa_index, args.mfa_split_root)
+            if ref_pairs is None:
+                mfa_missing += 1
+            else:
+                mfa_covered += 1
+                hyp_norm = [normalize(w).split()[0] if normalize(w) else ""
+                            for w, _ in emitted]
+                ref_norm = [w for w, _ in ref_pairs]
+                for k, (hi, ri) in enumerate(match_hyp_to_ref(hyp_norm, ref_norm)):
+                    lag = emitted[hi][1] - ref_pairs[ri][1]
+                    mfa_word_lags.append(lag)
+                    if k == 0:
+                        mfa_ttft_sims.append(lag)
 
         hyp = " ".join(pieces).strip()
         refs.append(it["ref"])
@@ -183,6 +211,16 @@ def main():
               f"mean {statistics.mean(ttft_from_speech_sims):.2f}s  "
               f"p50 {pctl(ttft_from_speech_sims, .5):.2f}s  "
               f"p95 {pctl(ttft_from_speech_sims, .95):.2f}s  (n={len(ttft_from_speech_sims)})")
+    if mfa_word_lags:
+        print(f"[MFA ground truth] TTFT from first word spoken: "
+              f"mean {statistics.mean(mfa_ttft_sims):.2f}s  "
+              f"p50 {pctl(mfa_ttft_sims, .5):.2f}s  "
+              f"p95 {pctl(mfa_ttft_sims, .95):.2f}s  (n={len(mfa_ttft_sims)})")
+        print(f"[MFA ground truth] word commit lag: "
+              f"mean {statistics.mean(mfa_word_lags):.2f}s  "
+              f"p50 {pctl(mfa_word_lags, .5):.2f}s  "
+              f"p95 {pctl(mfa_word_lags, .95):.2f}s  "
+              f"(n={len(mfa_word_lags)} matched; {mfa_covered} aligned, {mfa_missing} unaligned)")
     if word_lags:
         import statistics
         print(f"word commit lag (word spoken -> text visible): "

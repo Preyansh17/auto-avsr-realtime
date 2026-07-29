@@ -54,11 +54,20 @@ results:
     legal_wer: 6.56%             # best cross-domain number anywhere in this investigation (best seed: 5.46%)
     legacy_wer: 30.00%           # nominally worst tested, but N=10 clips/~40 words -> 1 word = 2.5pp; not decision-relevant
     beam_wer: [11.66%, 8.20%, 27.50%]   # merged/legal/legacy -- beam loses to greedy except on legacy
-    ttft_from_speech_seconds: ~0.98-1.04   # excludes leading silence
-    word_commit_lag_seconds: ~1.00-1.02
+    # Two references. MFA = Montreal Forced Aligner ground-truth word ends
+    # (neutral); model = the model's own predicted timestamps (self-referential,
+    # what every number in this repo used before 2026-07-25). Both exclude
+    # leading silence. See the writeup's "Latency measurement" section.
+    ttft_from_speech_seconds_mfa: 0.77-0.85       # mean, 3-seed median per domain
+    word_commit_lag_seconds_mfa: 0.65-0.71        # mean
+    ttft_from_speech_seconds_mfa_p95: 1.49-1.83
+    word_commit_lag_seconds_mfa_p95: 1.49-1.76
+    ttft_from_speech_seconds_model: ~0.98-1.04    # superseded; kept for continuity
+    word_commit_lag_seconds_model: ~1.00-1.02
     training_cost: "~2x slower than non-perturbed (per-sample resampling); each seed needed 2-3 checkpoint-resume rescues from cluster auto-cancellation"
 
   # alternative: nominally better on legacy, worse on merged/legal (legacy N=10, see known_gaps).
+  # latency fields below are MODEL-REFERENCED only (no MFA rerun for these configs).
   epochs_210_no_speedperturb:
     merged_wer: 11.21%
     legal_wer: 8.20%
@@ -79,4 +88,6 @@ known_gaps:
   - "a differential decoder/joint LR recipe (base 2.5e-5, decoder/joint x0.2, wd=0.01, 70 epochs) was implemented (--decoder-joint-lr-scale) and tried: 28.25% WER, not competitive -- but confounded by low LR + short epoch count, so not a clean refutation of the idea"
   - "epochs=240 ties/marginally beats plain epochs=210 on merged WER but was never given the full battery -- 210 was chosen on cost/risk grounds, not because 240 was shown worse"
   - "training-speed: the ~7GB Lightning .ckpt write per validation epoch is the dominant fixed per-epoch cost. A/B (n=1/arm, H100 nodes) measured --ckpt-every-n-epochs=5 at ~18% faster with no quality cost, now the sbatch default; --val-every-n-epochs left at 1 since validation passes are nearly free and raising it costs selection granularity. Effective per-write cost ~18.6s, ~45% of the naive 7GB/171MBps arithmetic -- partly absorbed by page cache."
+  - "latency was re-measured 2026-07-25 against MFA ground-truth word ends instead of the model's own predicted timestamps. Medians IMPROVED (merged lag 1.02->0.70s) -- the a-priori expectation that RNN-T's emission delay made the old numbers flattering was wrong in that direction, because MFA marks a word's full acoustic extent and the model often commits before an elongated dysarthric word finishes. Tails got WORSE (merged p95 lag 1.36->1.76s). Most importantly it exposed a systematic ~0.4s emission-eagerness difference between seeds that the self-referential metric read as flat. Only the epochs=210+speedperturb config was re-measured; the other two configs' latency fields are still model-referenced."
+  - "vs Whisper on the same MFA reference (merged): Nemotron 0.80s TTFT / 0.70s lag vs Whisper 1.76s / 1.61s -- the ~2x mean advantage survives the correction, and Whisper moved the same direction by a similar amount so the old comparison was directionally right. But at p95 the advantage narrows to ~1.3-1.4x (1.83 vs 2.34s TTFT, 1.76 vs 2.54s lag). Quote means for typical responsiveness, p95 for worst case."
   - "nemotron_finetune.py gained --resume-ckpt (2026-07-22) to survive the cluster's auto-cancellation policy -- see the writeup's Checkpoint resume section for a caveat on SaveBestWER's best-tracking resetting on resume"
