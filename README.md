@@ -1,271 +1,49 @@
-# auto-avsr-realtime: Streaming Audio-Visual Speech Recognition
+# auto-avsr-realtime
 
-Real-time (streaming) AVSR fork of [auto_avsr](https://github.com/mpc001/auto_avsr), following the PyTorch blog
-[Real-time AV-ASR](https://pytorch.org/blog/real-time-speech-rec/): an **Emformer RNN-T transducer**
-decoded chunk-by-chunk with carried state, instead of the offline Conformer + CTC/attention
-beam search (which remains in the original `auto-avsr` repo).
+Streaming audio-visual speech recognition for dysarthric patient speech — an **Emformer RNN-T**
+transducer decoded chunk-by-chunk with carried state, forked from
+[auto_avsr](https://github.com/mpc001/auto_avsr) and following the PyTorch
+[Real-time AV-ASR](https://pytorch.org/blog/real-time-speech-rec/) blog.
 
-Input is **file-based streaming**: existing videos are consumed segment-by-segment as if they
-arrived live, with incremental transcript output. There is no microphone/camera capture.
+Streaming is **file-based**: clips are consumed segment-by-segment as if arriving live, with
+incremental transcript output. There is no microphone/camera capture — this keeps evaluation
+reproducible and latency measurable against ground truth.
 
-Built on the [torchaudio examples/avsr recipe](https://github.com/pytorch/audio/tree/main/examples/avsr)
-and the device_avsr tutorial assets.
+Audio-only baselines (Whisper, NVIDIA Nemotron) live in `asr_baselines/` and are benchmarked
+against the AV model to answer the project's driving question: **does the video stream help?**
 
-## What's here
+## Results
+
+Streaming decode on the audited three-way patient split, 3 seeds per configuration:
+
+| System | Merged WER | Legal WER (cross-domain) | TTFT | Word lag | RTF |
+| --- | --- | --- | --- | --- | --- |
+| **Whisper large-v3 + SpecAugment**, full FT, 1.2 s chunks | **8.97%** | **6.56%** | 1.76 s | 1.61 s | 0.170 |
+| **Nemotron 0.6B**, 210 epochs + speed perturbation | 10.76% | **6.56%** | **0.80 s** | **0.70 s** | **0.02–0.03** |
+| AV Emformer, audio-only (streaming-selected) | — | 26.8% | — | — | ~0.2 |
+| AV Emformer, audio-visual (streaming-selected) | — | 36.6% | — | — | ~0.2 |
+
+Whisper is the accuracy choice; Nemotron is ~2× lower latency and ~7× cheaper for ~1.8pp of merged
+WER. They tie on the like-for-like cross-domain test. **Audio-only beats audio-visual in every
+architecture tested** — video does not currently earn its cost.
+
+Latency is measured in simulated real time, anchored to speech onset, against forced-alignment
+ground truth. Full analysis: **[`results/project_report_2026-08-10.md`](results/project_report_2026-08-10.md)**.
+Dated investigation logs (weekly findings, sweep tables, postmortems) are in
+[`docs/investigations/`](docs/investigations/).
+
+## Layout
 
 | Path | Purpose |
 | --- | --- |
-| `online_avsr/` | Core package: model factories, Lightning module, streaming pipeline, transforms, patient dataset/datamodule |
-| `demo_realtime.py` | Stream a video file through the model with incremental transcript + RTF/latency stats |
-| `train.py` / `eval.py` | Fine-tune (or train from scratch) and evaluate on patient data |
-| `asr_baselines/` | Audio-only ASR baselines (Whisper, NVIDIA Nemotron streaming) the AV model is benchmarked against — see `asr_baselines/README.md` |
-| `results/` | Dated investigation write-ups (weekly findings, bug postmortems, open items) — the source of truth for "what's the current best number and why" |
-| `scripts/download_assets.py` | Fetch the pretrained streaming model + SentencePiece vocab |
-| `scripts/bootstrap_from_jit.py` | Convert the pretrained TorchScript model into a fine-tunable eager checkpoint |
-| `scripts/regenerate_patient_labels.py` | Re-tokenize old label CSVs (unigram5000 → spm_unigram_1023) |
-| `scripts/merge_lora_ckpt.py` | Merge any saved LoRA epoch checkpoint into plain weights for eval, without retraining |
-| `scripts/read_eval_summary.py` | Read a field (or whole dict) out of an `eval.py` run's `summary.json`, by glob — used by sweep scripts to avoid fragile inline shell quoting |
-| `slurm/` | NYU HPC templates (singularity + conda) for fine-tune / scratch / eval / label regen / checkpoint selection |
-| `preparation/` | Face & mouth-ROI detectors (mediapipe, retinaface, and torchaudio's face-crop variant) |
-
-## Current best results
-
-Streaming WER on patient data, honest (train/val-selection/held-out-test split, no
-double-dipping between checkpoint selection and reporting):
-
-| Model | Mode | Legal-only | Merged |
-| --- | --- | --- | --- |
-| **Whisper large-v3 + SpecAugment, full finetune** | offline | **5.5%** | **2.6%** |
-| Whisper large-v3 + SpecAugment, SimulStreaming (1.2s chunks) | streaming | 9.3% | 4.0% |
-
-*(single-seed numbers, from the earlier `3way_full`/`3way_merged` checkpoints. See the
-3-seed, 3-domain table below for the variance-aware version of this leaderboard, which
-uses a newer, independently-audited split and should be preferred for any claim about
-Whisper's real performance range.)*
-
-### 3-domain, 3-seed results (2026-07-13, audited split_v1)
-
-Repeated the whole Whisper large-v3+SpecAugment full-FT experiment against a new,
-independently-audited three-way split
-(`/scratch/th3482/LipVideoData/patient_legal298_legacy96_split_v1`, `split_audit.json`,
-seed=7) covering all three domains — **legal**, **legacy**, and **merged** — with 3
-training seeds each (9 finetune runs total), so both offline and streaming numbers are
-reported as a real range instead of a single lucky/unlucky draw. This is the first time
-**legacy** has ever had an honest train/val/test split in this project (76/10/10 clips);
-previously only legal and merged had one.
-
-| Domain (train/val/test) | Offline WER (seed1/2/3) | Offline mean | Streaming WER (seed1/2/3, 0.6s) | Streaming mean |
-| --- | --- | --- | --- | --- |
-| Legal (238/30/30) | 6.56% / 7.65% / 8.74% | **7.65%** | 14.75% / 16.94% / 11.48% | **14.39%** |
-| Legacy (76/10/10) | 40.00% / 17.50% / 25.00% | **27.5%** | 32.50% / 22.50% / **50.00%** | **35.0%** |
-| Merged (314/40/40) | 9.87% / 7.62% / 7.17% | **8.22%** | 17.49% / 17.49% / 16.14% | **17.04%** |
-
-Streaming latency is flat across domains regardless of WER (architecture-driven, not
-data-driven): TTFT p50 ~2.0-2.6s, word-commit lag p50 ~1.6-1.7s at 0.6s segments, matching
-the earlier legal/merged-only streaming investigation.
-
-**Legacy is genuinely high-variance, not a fluke pairing** — its 10-clip test set produces
-a 22.5pp offline range (17.5-40.0%) that *widens* to 27.5pp under streaming (22.5-50.0%),
-and the seed ranking flips entirely: seed3 is the **best** offline seed (25.0%) but becomes
-the **worst** streaming seed (50.0%). A single-seed streaming number on legacy would have
-been close to meaningless either way it landed — this is exactly the failure mode 3-seed
-evaluation exists to catch. Legal and merged stay comparatively stable across seeds (5.5pp
-and 1.4pp streaming range respectively).
-
-Streaming costs a fairly consistent +6.7 to +8.8pp across all three domains (legal +6.7pp,
-legacy +7.5pp, merged +8.8pp mean-to-mean) — in the same range as the original
-legal-only/merged streaming penalty found earlier. Full writeup, including two real bugs
-hit and fixed along the way (a token-vocabulary mismatch that looked like a queue problem,
-and a red-herring SLURM error message), in
-`results/whisper_streaming_investigation_2026-07-09.md`.
-
-### New best streaming numbers: warmup/weight-decay tune (2026-07-18)
-
-Two training hyperparameters (`--warmup-steps`, `--weight-decay`) were inherited from an old LoRA recipe and never revisited for full-FT. Tried `--warmup-steps 25 --weight-decay 0.01` (was 100 / 0.0) on all three domains, 3 seeds each, same large-v3 full-FT + SpecAugment recipe otherwise:
-
-| Domain | Offline mean (tuned vs baseline) | Streaming mean (tuned vs baseline) |
-| --- | --- | --- |
-| **Merged** | **7.62%** vs 8.22% | **11.96%** vs 17.04% |
-| Legal | 6.38% vs 7.65% | 11.66% vs 14.39% |
-| Legacy | 21.67% vs 27.5% | 32.50% vs 35.0% |
-
-**Merged is a clean win** — every one of its 3 tuned seeds matches or beats the baseline's best seed (16.14%), not just one lucky seed (unlike two other levers tried the same week: checkpoint soup, no win; speed perturbation, looked like a win on 1 seed, reversed on 3 — see the investigation doc). **Legal and legacy improve on mean but less cleanly** — legal has only 1 of 3 tuned seeds beating baseline's best; legacy's mean improves and its wild seed variance collapses (27.5pp range → 5pp) but no tuned seed beats baseline's lucky-best individual seed (22.50%, itself a known outlier on a 10-clip test set). Net: worth keeping as the new default recipe (never worse on mean, often much better), but only merged should be quoted as an unambiguous win. Latency unaffected on all three. Full tables and per-seed breakdown in `results/whisper_streaming_investigation_2026-07-09.md`.
-
-### Merged streaming, better again for free: decode at 1.2s segments (2026-07-19)
-
-The "0.6s segments + `frame_threshold=25` is the sweet spot" conclusion was measured on the *old* pre-tune checkpoints and does not survive the recipe change. Re-swept on the tuned checkpoints (decode-only, **no retraining**):
-
-| Decode point | Merged streaming WER (3 seeds) | Spread | TTFT p50 | Word-lag p50 | RTF |
-| --- | --- | --- | --- | --- | --- |
-| 0.6s / ft=25 (old) | 11.96% (11.66 / 8.07 / 16.14) | 8.07pp | ~1.5s | ~1.6s | 0.300 |
-| **1.2s / ft=18 (new)** | **8.97%** (8.97 / 8.97 / 8.97) | **0.00pp** | ~2.0s | ~1.8s | **0.170** |
-
-Better WER, ~half the compute, and the seed variance vanishes entirely — but ~0.5s more time-to-first-text. **Treat it as a Pareto choice, not a strict upgrade:** 1.2s/ft=18 for accuracy-first use, 0.6s/ft=25 if half a second of latency matters more, and 0.3s/ft=25 (12.11% @ TTFT ~1.4s) if it matters a lot.
-
-It generalizes to the other two domains (3 seeds each, decode-only), with RTF roughly halving everywhere:
-
-| Domain (test size) | Streaming @0.6s/ft=25 | Streaming @1.2s/ft=18 | Gain |
-| --- | --- | --- | --- |
-| Merged (40 clips) | 11.96% | **8.97%** | −2.99pp |
-| Legal (30 clips) | 11.66% | **10.02%** | −1.64pp |
-| Legacy (10 clips) | 32.50% | **30.00%** | −2.50pp |
-
-Legal is clean (2 of 3 seeds improve, 1 ties, none regress). Legacy is directional only — its 10-clip/40-word test set makes one word worth 2.5pp, and one seed regresses there. **Merged is the number to quote.**
-
-Two things worth noting. First, at 1.2s the offline→streaming gap is only **1.35pp** (8.97% vs 7.62% offline), not the ~4pp assumed throughout this investigation — most of the "streaming penalty" was a decode-configuration artifact, and what streaming really costs here is latency, not accuracy. Second, the seed scatter that looked like training instability was largely the short buffer amplifying small model differences: given a 1.2s buffer all three checkpoints score identically.
-| Whisper medium + SpecAugment, full finetune | offline | 9.8% | 2.6% |
-| AV Emformer, audio-only, LoRA (streaming-selected) | streaming | 26.8% | — |
-| Nemotron, full finetune (30 epochs, untuned default), cache-aware streaming decode | streaming | 33.3% | 32.2% |
-| Nemotron, full finetune (90 epochs, swept), cache-aware streaming decode | streaming | 19.7% | 18.6% |
-| *(both Nemotron rows are ad-hoc-split and superseded — see the 2026-07-19 and 2026-07-24 updates below for split_v1 numbers)* | | | |
-| AV Emformer, audio-visual, LoRA (streaming-selected) | streaming | 36.6% | — |
-
-**Update (2026-07-17): Nemotron's 30-epoch number above was the untuned `--epochs 30`
-default, never swept.** Epoch count turned out to be the single biggest lever tried on
-Nemotron full-FT: 60 epochs reaches 20.2%/18.1%, 90 epochs (the confirmed sweet spot —
-120 already reverses) reaches 19.7%/18.6%, both on the exact same recipe otherwise
-(lr=1e-4, batch=2, grad_accum=2). A single merged-trained (epochs=90) model also
-generalizes to legacy at 13.5% WER cross-domain — far better than legacy-only training
-ever achieved (87-95% WER, AV Emformer era) — without any legacy-specific training data.
-Beam search decode adds a further 2-6pp offline but was confirmed **impossible in the
-streaming path**: NeMo's cache-aware carried-state loop only implements a merge path for
-greedy decode; both beam algorithms tried (`maes`, `malsd_batch`) raise an explicit
-`NotImplementedError` on partial-hypothesis merging. Full writeup, including the
-disk-quota trap hit mid-sweep and its cleanup, in
-`results/week_results_2026-07-14_2026-07-17.md`.
-
-**Update (2026-07-19): the numbers above were on an ad-hoc split, never on the audited
-`split_v1` Whisper's own leaderboard uses — Nemotron had never been run on split_v1 at
-all before this.** Retrained the same recipe (merged, full-FT) on split_v1 and swept
-epochs further: 90→20.6%, 120→14.8%, 150→13.0%, **180→12.1% (best found, still improving,
-no plateau)** — median in-domain merged WER, 3 seeds each. **The "120 already reverses"
-claim above does not hold on split_v1** — epoch count's sweet spot turns out to be
-split-dependent, not a fixed recipe property. Cross-domain streaming (epochs=120, the
-most fully characterized checkpoint): legal 12.0%, legacy 20.0% — both with ~0.9-1.0s
-TTFT-from-speech and ~0.85-0.88s word-commit lag, matching the ad-hoc split's latency
-numbers almost exactly. Legacy itself is split-dependent too (13.5% ad-hoc vs 20.0%
-split_v1, same recipe) — unexplained. Epochs=180 has only its in-domain merged number
-confirmed so far; cross-domain/streaming/beam not yet rerun on it. Full writeup,
-including the exact best-config hyperparameters, in
-`results/nemotron_splitv1_epoch_sweep_2026-07-18.md`.
-
-**Update (2026-07-24): epochs=180 is superseded. Current best Nemotron config is
-epochs=210 + speed perturbation** — merged 10.76%, legal **6.56%**, legacy 30.00%
-(3-seed medians, streaming, split_v1, merged-trained and evaluated cross-domain).
-Legal at 6.56% (best seed 5.46%) is the best cross-domain number this investigation
-has produced. The epoch sweep was pushed to 210 and 240, which tie on merged median
-(11.21% each, both beating 180's 12.11%); 210 was taken as the stopping point on
-cost/risk grounds rather than because 240 was shown worse. Speed perturbation
-(NeMo's native `train_ds.perturb_speed`) was then worth a further ~0.45pp on merged
-and ~1.64pp on legal, beating its non-perturbed counterpart on all three seeds
-individually — but it **regresses legacy by 5pp**, so it is not an unconditional
-recommendation.
-
-Legacy trends the other way — it has worsened at every step that improved the other
-two domains (120/180/210/210+perturb: 20.0% → 22.5% → 25.0% → 30.0%). **Decided
-2026-07-24 not to chase this: legacy's test set is 10 clips / ~40 words, so one word
-is 2.5pp and that entire 10pp span is four words.** No re-analysis of the same ten
-clips can separate a real effect from which handful of utterances landed in the
-sample; it would need a bigger legacy test set, which is a data-collection question
-rather than a modeling one. Treat legacy as not decision-relevant when choosing
-between these configs and pick on merged (N=40) and legal (N=30), which move together.
-
-Also settled since: streaming WER equals offline greedy WER **exactly** on every
-domain/seed pair across every config in this investigation — chunked cache-aware
-decode costs Nemotron nothing in accuracy. Beam decode now loses to greedy on merged
-and legal (and remains impossible in the streaming path regardless). A differential
-decoder/joint LR recipe was implemented and tried at 28.25% WER — not competitive,
-though confounded by pairing a low LR with a short epoch count.
-
-Streaming latency, all measured via simulated real-time (chunk k's audio only
-exists at (k+1)*chunk_duration seconds, matching a live deployment):
-
-| Model | RTF | ms/chunk | Time-to-first-text (p50) | Word-commit lag (p50) |
-| --- | --- | --- | --- | --- |
-| Whisper streaming (1.2s chunks) | 0.18-0.20 | ~200-217 | 2.6s | 1.8-1.9s |
-| Whisper streaming (0.6s chunks) | 0.30-0.31 | ~170-180 | 2.0s | 1.5-1.7s |
-| Nemotron streaming | 0.019-0.026 | 19-26 | 2.2-3.3s (**0.80s** from speech onset†) | **0.70s**† |
-
-†Measured via `nemotron_streaming_eval.py --word-lag`. The 2.2-3.3s TTFT figure is
-anchored at stream start and so includes each clip's leading silence; the bolded
-figures are anchored at the word's own speech onset.
-
-**Reference matters, and these bolded numbers use Montreal Forced Aligner ground
-truth (as of 2026-07-25), not the model's own predicted timestamps.** The earlier
-model-referenced figures (~1.0s TTFT, ~0.9-1.0s lag) were self-referential: a
-checkpoint that emits later also predicts later timestamps, so the difference partly
-cancels. Against MFA the merged 3-seed medians are 0.80s TTFT / 0.70s word lag —
-*better* than the old numbers, because MFA marks a word's full acoustic extent and
-the model often commits before an elongated dysarthric word finishes. The tails move
-the other way: p95 lag 1.36s → 1.76s, p95 TTFT 1.10s → 1.83s. Whisper measured on the
-same reference is 1.76s TTFT / 1.61s lag (its own model-referenced figures were 2.06s
-/ 1.86s), so Nemotron's ~2x mean advantage survives — but narrows to ~1.3-1.4x at
-p95. Full methodology and the four findings, including one prediction that failed, in
-`results/nemotron_splitv1_epoch_sweep_2026-07-18.md`.
-
-*Nemotron word-level timestamps hit a NeMo library bug on the eval script this was
-first measured with: `compute_timestamps=True` crashes cache-aware streaming's
-carried partial-hypothesis state on both greedy decode paths in that script. A
-different eval script (`nemotron_streaming_eval.py --word-lag`) works around it
-differently and does have working word-level timestamps — see the correction below
-and `results/whisper_streaming_investigation_2026-07-09.md`.
-
-Tried shrinking Nemotron's chunk size (`att_context_size` presets `[70,13]`→`[70,0]`,
-1.12s down to 0.08s/chunk fully causal) hoping for a Whisper-style latency win — it
-isn't one. TTFT barely moves (2.2-3.3s → 2.2-2.3s, ~1s at best) while WER degrades
-sharply and monotonically (32-33%→44-47% at fully causal) and RTF rises 0.02→0.18.
-Nemotron's TTFT floor isn't set by its encoder chunk size; the pretrained default is
-already close to the best tradeoff available on this axis. **Caveat added
-2026-07-17: this TTFT was measured stream-start-anchored (includes leading
-silence), and Nemotron's silence contamination turned out to be much larger than
-Whisper's — see the correction immediately below before trusting the absolute TTFT
-values here.** Full sweep table in `results/whisper_streaming_investigation_2026-07-09.md`.
-
-Streaming Whisper (via [SimulStreaming](https://github.com/ufal/SimulStreaming)'s
-AlignAtt policy, `asr_baselines/whisper_streaming_eval.py`) costs ~1.7-1.9pp over
-offline Whisper but still beats every other streaming system's WER by ~17pp+.
-Nemotron has near-zero streaming *WER* penalty (its FastConformer encoder is
-architecturally causal/cache-aware already, unlike Whisper's bidirectional
-encoder — there's little "peek at the future" advantage for streaming to lose).
-
-**Correction (2026-07-17): the "Nemotron's TTFT is comparable to or worse than
-Whisper's" claim above does not hold.** Both scripts' TTFT numbers were measured
-from stream start, including each clip's leading silence — and Nemotron's
-silence contamination (1.2-2.4s) turned out much larger than Whisper's (0-0.9s),
-making the comparison unfair rather than revealing a real Nemotron weakness. A
-speech-anchored TTFT (from the first word's own end-of-speech, not file start) plus
-word-commit lag were added to both `whisper_streaming_eval.py` and
-`nemotron_streaming_eval.py --word-lag` and rerun:
-
-| | Whisper (0.6s, `split_v1` mean) | Nemotron |
-| --- | --- | --- |
-| Speech-anchored TTFT | ~1.7s | **~1.0-1.1s** |
-| Word-commit lag | ~1.6s | **~0.86-0.99s** |
-| RTF | ~0.30 | ~0.02-0.03 |
-
-Nemotron is both far cheaper to run **and** genuinely lower-latency once measured
-correctly — not "comparable or worse despite lower compute." Only checked on two
-checkpoints (`nemotron_fullft_3way_legal_seed3`/`merged_seed1`) so far.
-
-**The chunk-size sweep's "not a useful lever" verdict (line 102-111 above) is also
-overturned.** Rerun with the corrected metric: latency is not flat across presets —
-`[70,6]` (0.56s chunk) actually beats the pretrained default `[70,13]` on TTFT
-(0.63-0.70s vs 1.01-1.10s, ~35% better) for a modest WER cost (+4-5pp). Shrinking
-further (`[70,1]`, `[70,0]`) makes latency *worse*, not better — word-lag triples
-and RTF rises sharply — so chunk size is a real, non-monotonic lever with a sweet
-spot at `[70,6]`, not a dead one. See
-`results/whisper_streaming_investigation_2026-07-09.md` for the full 8-run table.
-
-Video does not currently help: audio-only configs beat their audio-visual counterparts
-across every architecture tested. See `results/week_results_2026-06-23_2026-07-01.md`
-(§27-31) and `results/week_results_2026-07-02_2026-07-06.md` for the full investigation,
-including two real methodology bugs found and fixed along the way — a WER metric
-mismatch between architectures (§27) and a checkpoint-selection bias in Whisper's
-default recipe (§28-30) that briefly inflated its headline number before an honest
-three-way split corrected it. `results/whisper_streaming_investigation_2026-07-09.md`
-documents the streaming-Whisper effort: initially blocked on garbage output, root-caused
-to a silently fp16-corrupted checkpoint conversion, fixed, and completed with the
-streaming numbers above.
+| `online_avsr/` | Core package: model factories, Lightning module, streaming pipeline, transforms, patient dataset |
+| `train.py` / `eval.py` | Fine-tune (or train from scratch) and evaluate |
+| `demo_realtime.py` | Stream a video file with incremental transcript + RTF/latency stats |
+| `asr_baselines/` | Audio-only baselines (Whisper, Nemotron) — see `asr_baselines/README.md` |
+| `scripts/` | Asset download, JIT→eager bootstrap, label re-tokenization, LoRA merge, latency benchmark |
+| `slurm/` | NYU HPC templates (singularity + conda) |
+| `preparation/` | Face and mouth-ROI detectors |
+| `docs/investigations/` | Dated write-ups — the record of how each number was arrived at |
 
 ## Two architectures
 
@@ -273,175 +51,114 @@ streaming numbers above.
 | --- | --- | --- |
 | Video frontend | Linear(44×44 → 512) on face crops | Conv3d+ResNet18 on 88×88 mouth ROIs |
 | Emformer | 12 layers, dim 256, ffn 1024 | 20 layers, dim 128, ffn 2048 |
-| Streaming cadence | segment 32 + right-context 4 (1.44 s) | segment 64, rc 0 (2.56 s) by default |
-| Pretrained weights | yes (`bootstrap_from_jit.py`, bit-exact) | no |
+| Streaming cadence | segment 32 + right-context 4 (1.44 s) | segment 64, rc 0 (2.56 s) |
+| Pretrained weights | yes (bit-exact bootstrap) | no |
 
-The published pretrained model is the blog's "Small" device configuration. The bootstrap maps
-**100% of parameters with zero numerical difference**, so fine-tuning starts from the real
-pretrained model. Segment/right-context lengths are decode-time settings — weight shapes don't
-depend on them.
+The bootstrap maps **100% of parameters with zero numerical difference**, so fine-tuning starts
+from the real pretrained model. Segment and right-context are decode-time settings — weight shapes
+do not depend on them.
 
-## Setup (local, macOS/Linux)
+## Setup
 
-Requires [uv](https://docs.astral.sh/uv/). Python 3.12 and all pins come from `pyproject.toml`
-(torch/torchaudio **2.6.0** — the RNN-T streaming APIs are deprecated from torchaudio 2.8, do
-not upgrade casually; mediapipe ≤ 0.10.21 for the legacy `mp.solutions` API).
+Requires [uv](https://docs.astral.sh/uv/). Pins come from `pyproject.toml` — torch/torchaudio
+**2.6.0** (RNN-T streaming APIs are deprecated from 2.8, do not upgrade casually) and
+mediapipe ≤ 0.10.21 for the legacy `mp.solutions` API.
 
 ```bash
 uv venv --python 3.12 && uv sync
 source .venv/bin/activate
-python scripts/download_assets.py          # pretrained JIT model -> cpts/, spm -> spm/
-python scripts/bootstrap_from_jit.py       # eager fine-tunable checkpoint + parity report
-python -m tests.test_smoke                 # CPU smoke tests
+python scripts/download_assets.py     # pretrained JIT model -> cpts/, spm -> spm/
+python scripts/bootstrap_from_jit.py  # eager fine-tunable checkpoint + parity report
+python -m tests.test_smoke
 ```
 
 ## Streaming demo
 
 ```bash
-# Pretrained model, any talking-head video (mediapipe face crops):
 python demo_realtime.py --video clip.mp4 --jit-model cpts/device_avsr_model.pt --carry-state
-
-# Same weights, eager checkpoint (canonical windowing with true lookahead):
-python demo_realtime.py --video clip.mp4 --checkpoint cpts/online_avsr_bootstrap.ckpt
-
-# Fine-tuned checkpoint on an already-cropped patient mouth-ROI mp4 (sibling .wav picked up):
 python demo_realtime.py --video roi_clip.mp4 --checkpoint exp/run/last.ckpt --preprocess roi
-
-# Pace output like a live source and log per-chunk records:
 python demo_realtime.py --video clip.mp4 --simulate-realtime --output-jsonl out.jsonl
 ```
 
-`--preprocess`: `face` (mediapipe detect → align → face crop; what the pretrained model expects),
-`mouth` (auto-avsr mouth-ROI detection), `roi` (input already cropped), `none` (raw resize, smoke
-tests). Defaults follow the model. Reference example (12 s public-domain clip, M-series CPU):
-overall RTF ≈ 0.2, algorithmic latency = (segment + right context)/25 fps = 1.44 s.
+`--preprocess`: `face` (detect → align → crop; what the pretrained model expects), `mouth`
+(auto-avsr mouth-ROI detection), `roi` (already cropped), `none` (raw resize, smoke tests).
+Reference: 12 s clip on an M-series CPU → RTF ≈ 0.2, algorithmic latency 1.44 s.
 
-## Patient fine-tuning workflow
+## Patient fine-tuning
 
-1. **Re-tokenize labels** (old CSVs carry uppercase unigram5000 ids; the streaming model uses the
-   lowercase 1023-piece vocab):
-   ```bash
-   python scripts/regenerate_patient_labels.py --old-csv labels/train.csv --preview 5  # eyeball
-   python scripts/regenerate_patient_labels.py --old-csv labels/train.csv labels/val.csv
-   ```
-2. **Fine-tune from the pretrained bootstrap** (device architecture, 44×44 frames):
-   ```bash
-   python train.py --model-source bootstrap \
-     --root-dir /path/to/patient_data \
-     --train-file labels/train_spm1023.csv --val-file labels/val_spm1023.csv \
-     --precision bf16-mixed --batch-size 2 --accumulate-grad-batches 4
-   ```
-   On the cluster: `sbatch slurm/train_realtime_finetune.sbatch` (paths/epochs via env vars).
+```bash
+# 1. Re-tokenize labels (old CSVs carry unigram5000 ids; the streaming model uses 1023-piece SPM)
+python scripts/regenerate_patient_labels.py --old-csv labels/train.csv labels/val.csv
 
-   **LoRA variant** — freeze the pretrained weights and train low-rank adapters only
-   (~2.4% of parameters with the defaults; good for small patient sets):
-   ```bash
-   python train.py --model-source bootstrap --lora \
-     --lora-r 8 --lora-alpha 16 --lora-scopes encoder predictor joiner fusion \
-     --root-dir /path/to/patient_data \
-     --train-file labels/train_spm1023.csv --val-file labels/val_spm1023.csv
-   ```
-   Cluster: `sbatch slurm/train_realtime_lora.sbatch`. The run directory gets
-   `model_lora_merged.pth` (adapters folded back into plain weights) which eval.py and
-   demo_realtime.py consume directly; `last.ckpt` keeps the LoRA form for resuming.
-   Scopes: `encoder` (Emformer), `predictor`, `joiner`, `fusion`, `video_frontend`, or `all`.
-3. **Evaluate** (streaming WER + RTF, or offline utterance mode):
-   ```bash
-   python eval.py --checkpoint exp/run/last.ckpt --mode streaming \
-     --root-dir /path/to/patient_data --test-file labels/test_spm1023.csv --preprocess roi
-   ```
-   The summary reports both `avg_wer` (macro-average of per-clip WER, kept for back-compat)
-   and `corpus_wer` (pooled: total edits / total ref words — the standard WER convention,
-   also what `asr_baselines/metrics.py` uses for Whisper/Nemotron). **Use `corpus_wer`** for
-   any comparison against those other models; the two are not the same number and differ by
-   a few points on this data.
-4. **Select the best checkpoint properly** (optional, but strongly recommended). The default
-   recipe merges whatever the *last* epoch produced — no selection at all. Two selection
-   metrics were tried and found **not to track real streaming WER** on this recipe: `val_loss`
-   anti-correlates with WER, and NeMo/HF-style per-epoch greedy-utterance `val_wer` doesn't
-   track streaming-beam WER either (see `results/week_results_2026-06-23_2026-07-01.md` §4-5).
-   The fix that actually works: decode every candidate epoch in **real streaming mode** against
-   a selection set, pick the best, report on a disjoint held-out set:
-   ```bash
-   # Train with AVG_LAST_N>0 so Lightning keeps the last N epoch checkpoints on disk:
-   AVG_LAST_N=20 sbatch slurm/train_realtime_lora.sbatch
-   # Then sweep them in real streaming mode and report on a held-out test set:
-   RUN_DIR=<exp-dir>/<run> SELECT_FILE=val_spm1023.csv TEST_FILE=test_spm1023.csv \
-     sbatch slurm/select_best_streaming_epoch.sbatch
-   ```
-   This found a large, consistent win over merge-last on every seed tested — see
-   `results/week_results_2026-06-23_2026-07-01.md` §31.
+# 2. Fine-tune from the pretrained bootstrap
+python train.py --model-source bootstrap --seed 1 \
+  --root-dir /path/to/patient_data \
+  --train-file labels/train_spm1023.csv --val-file labels/val_spm1023.csv \
+  --precision bf16-mixed --batch-size 2 --accumulate-grad-batches 4
 
-Notes:
-- Fine-tunes from the bootstrap **must** keep `spm/spm_unigram_1023.model` (enforced; sha256 is
-  recorded in the run manifest). `--generate-sp-model` is for from-scratch runs only.
-- The pretrained frontend saw *face* crops; patient data is *mouth ROIs* — a known distribution
-  shift that fine-tuning absorbs. Do not re-run face detection on already-cropped patient clips;
-  use `--preprocess roi` end to end.
-- RNNT loss memory grows with sequence length × target length; patient CSVs are 24 s-segmented
-  and `--max-frames 600` drops outliers. Use batch 1–2 + `--accumulate-grad-batches`.
-- This recipe has **large run-to-run WER variance when unseeded** (~24pp observed across
-  otherwise-identical runs) — always pass `--seed`/`SEED` and compare medians over ≥3 seeds,
-  never trust a single run. See `results/week_results_2026-06-23_2026-07-01.md` §10 for the
-  investigation that found this.
+# 3. Evaluate in streaming mode
+python eval.py --checkpoint exp/run/last.ckpt --mode streaming \
+  --root-dir /path/to/patient_data --test-file labels/test_spm1023.csv --preprocess roi
+```
 
-## Cluster environment (NYU HPC)
+LoRA variant: add `--lora --lora-r 8 --lora-alpha 16 --lora-scopes all` (trains ~2.4% of
+parameters). The run directory gets `model_lora_merged.pth`, which `eval.py` and
+`demo_realtime.py` consume directly. On the cluster: `sbatch slurm/train_realtime_{finetune,lora}.sbatch`.
 
-The sbatch templates expect a conda env `avsr_realtime` inside the singularity overlay.
-Create it once with the overlay mounted **read-write** (the run templates mount it `:ro`):
+**Four things that will bite you:**
+
+- **Always pass `--seed` and compare medians over ≥3 seeds.** Unseeded, this recipe has ~24pp
+  run-to-run WER variance; a single run means nothing.
+- **Report `corpus_wer`, not `avg_wer`.** `eval.py` emits both; `corpus_wer` is pooled (total edits
+  / total reference words, the standard convention) and is what `asr_baselines/metrics.py` uses.
+  The two differ by a few points, so mixing them invalidates any cross-model comparison.
+- **Select checkpoints in streaming mode.** The default merges whatever the last epoch produced.
+  `val_loss` anti-correlates with WER here, and greedy-utterance `val_wer` does not track streaming
+  WER either. Train with `AVG_LAST_N=20`, then
+  `RUN_DIR=<dir> sbatch slurm/select_best_streaming_epoch.sbatch` to decode every candidate epoch
+  in real streaming mode and report on a disjoint set. Worth 17–42pp.
+- **Do not re-run face detection on already-cropped clips** — use `--preprocess roi` end to end.
+  Fine-tunes from the bootstrap must keep `spm/spm_unigram_1023.model` (enforced; sha256 recorded
+  in the run manifest).
+
+RNN-T loss memory grows with sequence × target length; patient CSVs are 24 s-segmented and
+`--max-frames 600` drops outliers. Use batch 1–2 with gradient accumulation.
+
+## Cluster (NYU HPC)
+
+The sbatch templates expect a conda env `avsr_realtime` inside a singularity overlay, created once
+with the overlay mounted read-write (run templates mount it `:ro`):
 
 ```bash
 singularity exec --overlay /scratch/$USER/avsr/overlay-15GB-500K.ext3:rw \
   /share/apps/images/cuda12.3.2-cudnn9.0.0-ubuntu-22.04.4.sif /bin/bash
-# inside:
 source /ext3/env.sh
 conda create -y -n avsr_realtime python=3.12 && conda activate avsr_realtime
 pip install torch==2.6.0 torchaudio==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
 pip install "pytorch-lightning>=2.4,<3" sentencepiece "mediapipe<=0.10.21" opencv-python scikit-image av soundfile
 ```
 
-### Patient data layout (matches the offline runs)
+Patient data is resolved by `slurm/_patient_data.sh` via `RUN_DATA_MODE`
+(`legal_only` | `legacy_only` | `merged`), which also re-tokenizes labels to the 1023-piece vocab
+before training. Templates take `PROJECT_ROOT`, `ROOT_DIR`, `RUN_DATA_MODE`, `MAX_STEPS`,
+`MAX_EPOCHS`, `SEED`, `LORA_*` as env-var overrides.
 
-The training/eval templates resolve patient data exactly like the offline
-`train_patient_av_lora_legal298_*` scripts, via `slurm/_patient_data.sh`:
-
-- `RUN_DATA_MODE=legal_only` (default) → `patient_legal298_crops_unseen`
-- `RUN_DATA_MODE=legacy_only` → `patient_25p_crops_unseen`
-- `RUN_DATA_MODE=merged` (or `MERGE_WITH_PATIENT_UNSEEN=1`) → builds the legal298+unseen
-  merge (per-source `dataset_name` rewrite + symlinks), same as the offline merge.
-
-It reads the same `patient_retinaface_{train,val}_transcript_lengths_seg24s.csv` files and,
-before training, re-tokenizes them to the 1023-piece vocab (`*_spm1023.csv`).
-
-All templates take `PROJECT_ROOT`, `ROOT_DIR`, `RUN_DATA_MODE`, `LORA_*`, `MAX_STEPS`,
-`MAX_EPOCHS`, etc. as env-var overrides, e.g. `MERGE_WITH_PATIENT_UNSEEN=1 sbatch slurm/train_realtime_lora.sbatch`.
-
-### What carries over from the offline LoRA runs, and what doesn't
-
-| Offline arg | Streaming equivalent |
-| --- | --- |
-| `lora.r=8 alpha=16 dropout=0.05` | identical (`--lora-r/--lora-alpha/--lora-dropout`) |
-| `lora.scopes=[encoder,aux_encoder,decoder]` ("all") | `--lora-scopes all` (encoder/predictor/joiner/fusion/video_frontend) |
-| `max_steps=2850`, `max_epochs=10000` | identical (`--max-steps`, `--epochs`) |
-| `pretrained_model_path=…Conformer.pth` | `cpts/online_avsr_bootstrap.ckpt` (device_avsr) |
-| `vocab_file=…sentences.txt` (closed-vocab decode) | **none** — RNN-T decodes open-vocabulary |
-| `ctc_weight=0.1`, `beam_size=40`, `pre_beam_ratio` | **none in training** — RNN-T has no CTC; beam is decode-only (`eval.py --beam-width`) |
-| `data.modality=audiovisual` | AV only (the streaming model is audio-visual) |
+One-command reproducers for the two best audio results:
+`slurm/whisper_splitv1_best.sbatch` and `slurm/nemotron_splitv1_best.sh`.
 
 ## How streaming works
 
 Frames are consumed in fixed windows: `lookback` past frames (frontend receptive field, trimmed
-from the features), the new `segment`, and `right-context` lookahead frames. `Emformer.infer`
-requires **exactly** segment + right-context fused frames per call; `RNNTBeamSearch.infer` carries
-encoder state and the beam hypothesis across calls (`--no-carry-state` reproduces the tutorial's
-per-chunk reset instead). Algorithmic latency = (segment + rc)/25 fps; wall-clock per-chunk RTF is
-reported by the demo and eval.
+from the features), the new `segment`, and `right-context` lookahead. `Emformer.infer` requires
+**exactly** segment + right-context fused frames per call; `RNNTBeamSearch.infer` carries encoder
+state and the beam hypothesis across calls (`--no-carry-state` reproduces the tutorial's per-chunk
+reset). Algorithmic latency = (segment + rc)/25 fps; per-chunk wall-clock RTF is reported by the
+demo and by `eval.py`.
 
 ## Provenance / licenses
 
 - Recipe code ported from [pytorch/audio examples/avsr](https://github.com/pytorch/audio/tree/main/examples/avsr) (BSD-2-Clause).
-- `preparation/detectors/mediapipe_face/` is torchaudio's data_prep mediapipe detector (face crops);
-  the original auto_avsr detectors (mouth ROIs, Apache 2.0 headers) are kept alongside.
+- `preparation/detectors/mediapipe_face/` is torchaudio's data_prep mediapipe detector; the
+  original auto_avsr detectors (mouth ROIs, Apache 2.0) are kept alongside.
 - Pretrained weights: torchaudio `tutorial-assets/device_avsr_model.pt` (BSD-2-Clause), trained on
-  LRS3 + VoxCeleb2 + AVSpeech per Ma et al., "Auto-AVSR" (ICASSP 2023) and the
-  real-time AV-ASR blog post.
+  LRS3 + VoxCeleb2 + AVSpeech per Ma et al., "Auto-AVSR" (ICASSP 2023).

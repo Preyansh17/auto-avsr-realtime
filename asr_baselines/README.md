@@ -7,8 +7,8 @@ CSVs for `(waveform, text)` but trains via HuggingFace / NeMo.
 Goal framing: "do videos help?" These audio models are what the AV model must
 beat. **Current answer: no, not yet** — Whisper (audio-only, large pretrained)
 beats every AV Emformer config tested, and even within the AV Emformer itself,
-audio-only beats audio-visual. See `results/week_results_2026-06-23_2026-07-01.md`
-and `results/week_results_2026-07-02_2026-07-06.md` for the full investigation
+audio-only beats audio-visual. See `docs/investigations/week_results_2026-06-23_2026-07-01.md`
+and `docs/investigations/week_results_2026-07-02_2026-07-06.md` for the full investigation
 and current numbers — this file covers what's in this directory, not the findings.
 
 Green et al. (Interspeech 2021, Project Euphonia) recipe: freeze most of the
@@ -37,7 +37,7 @@ the default.
    which model size looked best before being caught and fixed). `TEST_FILE`
    (sbatch env var, defaults to `VAL_FILE` for back-compat) lets the final
    `whisper_eval.py` call report on a disjoint held-out set instead — use it.
-   See `results/week_results_2026-06-23_2026-07-01.md` §28-30 for the full
+   See `docs/investigations/week_results_2026-06-23_2026-07-01.md` §28-30 for the full
    story, including the corrected numbers.
 3. **Nemotron streaming** — `make_nemo_manifest.py` (CSV → NeMo jsonl),
    `nemotron_finetune.py` / `nemotron_eval.py` (FastConformer-CacheAware-RNNT;
@@ -54,33 +54,14 @@ the default.
    `TEST_FILE` support in the sbatch, same pattern as Whisper. Checked this
    for selection bias the same way as Whisper; **found none** — Nemotron
    never double-dipped, so there was nothing to correct (see
-   `results/week_results_2026-07-02_2026-07-06.md` §15).
+   `docs/investigations/week_results_2026-07-02_2026-07-06.md` §15).
 
    `nemotron_streaming_eval.py` / `slurm/nemotron_streaming_eval.sbatch`:
    real cache-aware streaming WER+latency (chunked decode with carried
    state), not just offline `transcribe()` — Nemotron's whole point is
    streaming inference, so the offline number alone was an upper bound, not
    the real deployment number. Streaming WER essentially matched offline WER
-   once measured (see `results/week_results_2026-07-02_2026-07-06.md` §12-13).
-
-4. **CarelessWhisper/WhisperRT** (arXiv 2508.12301) — genuinely causal
-   streaming Whisper (LoRA + causal attention masks, O(1) per-chunk decode,
-   chunks down to 40ms). The route flagged in
-   `results/whisper_streaming_investigation_2026-07-09.md` as the only lever
-   below SimulStreaming's ~1.4s latency floor.
-   `carelesswhisper_streaming_eval.py` (same manifest/metrics/latency contract
-   as `whisper_streaming_eval.py`; word-lag is greedy-only — beam decode has
-   no streaming timestamps upstream) + `slurm/carelesswhisper_streaming_eval.sbatch`
-   (zero-shot released checkpoints; they download anonymously from the public
-   HF repo `MLSpeech/CarelessWhisper-Streaming`).
-   Patient finetune: `make_carelesswhisper_dataset.py` (MFA corpus + training
-   CSV; alignments via `slurm/carelesswhisper_mfa_align.sbatch`) then
-   `slurm/carelesswhisper_finetune.sbatch` (papers over upstream quirks:
-   `ds_dict_private` import, hardcoded `/mlspeech` output roots). Deps:
-   `requirements-carelesswhisper.txt` (its OWN env; pyaudio deliberately
-   omitted — the eval script stubs it). Their sizes stop at **large-v2** (no
-   v3), and their original code is **CC BY-NC 4.0 (non-commercial)** — flag
-   before any clinical/commercial deployment.
+   once measured (see `docs/investigations/week_results_2026-07-02_2026-07-06.md` §12-13).
 
 ## Shared pieces
 
@@ -92,7 +73,7 @@ the default.
   Levenshtein fallback. `eval.py` (the AV Emformer's own eval script) was
   found to use a *different* metric (macro-average of per-clip WER) until
   fixed to also report a matching `corpus_wer` — see the main README's
-  "Current best results" section and `results/week_results_2026-06-23_2026-07-01.md`
+  "Current best results" section and `docs/investigations/week_results_2026-06-23_2026-07-01.md`
   §27 if comparing older AV numbers against these.
 
 ## Methodology: honest three-way splits
@@ -100,7 +81,7 @@ the default.
 Every number in `results/` from mid-investigation onward uses a real
 train / val (selection only) / test (final report, never touched by
 selection) split, not just train/val. The splits are built once and reused
-across all three architectures for consistency — see `results/week_results_2026-06-23_2026-07-01.md`
+across all three architectures for consistency — see `docs/investigations/week_results_2026-06-23_2026-07-01.md`
 §29 for exactly how (including a real train/test contamination bug found and
 fixed when first attempting a train-corpus × eval-corpus generalization
 matrix across legal/legacy/merged domains — reusing independently-carved

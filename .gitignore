@@ -20,3 +20,10 @@ exp/
 outputs/
 *.ckpt
 *.pt
+.DS_Store
+
+# Per-clip reference/hypothesis dumps contain real patient speech transcripts.
+# Never commit these to a public repository.
+*_breakdown.csv
+*_hyps.tsv
+.tmp_preview/
