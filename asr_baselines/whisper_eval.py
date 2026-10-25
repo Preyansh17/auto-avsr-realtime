@@ -33,6 +33,10 @@ def main():
     p.add_argument("--task", default="transcribe")
     p.add_argument("--num-beams", type=int, default=1)
     p.add_argument("--max-frames", type=int, default=None)
+    p.add_argument("--prefix", choices=["lang_task", "sot_sot"], default="lang_task",
+                   help="decoder prompt: lang_task = <sot><lang><task><notimestamps> (HF default); sot_sot = "
+                        "<sot><sot><notimestamps>, what whisper_finetune.py trained on before 2026-10-20 "
+                        "(its collator never stripped the tokenizer's <sot>)")
     p.add_argument("--out", default=None, help="TSV of path\\tref\\thyp")
     args = p.parse_args()
 
@@ -42,6 +46,11 @@ def main():
     processor = WhisperProcessor.from_pretrained(args.model, language=args.language, task=args.task)
     model = WhisperForConditionalGeneration.from_pretrained(args.model).to(device).eval()
     forced = processor.get_decoder_prompt_ids(language=args.language, task=args.task)
+    gen_kw = {"forced_decoder_ids": forced}
+    if args.prefix == "sot_sot":
+        sot = model.generation_config.decoder_start_token_id
+        prompt = [sot, sot, model.generation_config.no_timestamps_token_id]
+        gen_kw = {"decoder_input_ids": torch.tensor([prompt], device=device)}
 
     examples = load_audio_examples(args.root_dir, args.label_file, args.sp_model_path,
                                    max_frames=args.max_frames)
@@ -50,7 +59,7 @@ def main():
         wav = load_waveform(ex.path).numpy()
         feats = processor.feature_extractor(wav, sampling_rate=16000, return_tensors="pt").input_features.to(device)
         with torch.inference_mode():
-            ids = model.generate(feats, forced_decoder_ids=forced, num_beams=args.num_beams)
+            ids = model.generate(feats, num_beams=args.num_beams, **gen_kw)
         hyp = processor.tokenizer.batch_decode(ids, skip_special_tokens=True)[0].strip()
         refs.append(ex.text)
         hyps.append(hyp)

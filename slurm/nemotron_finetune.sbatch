@@ -46,6 +46,8 @@ export EXP_DIR="${EXP_DIR:-/scratch/pa2753/experiments/nemotron_asr}"
 export EXP_NAME="${EXP_NAME:-nemotron_${DATASET_TAG}_j${SLURM_JOB_ID:-noslurm}}"
 export EPOCHS="${EPOCHS:-30}"
 export LEARNING_RATE="${LEARNING_RATE:-1e-4}"
+export LR_SCHEDULE="${LR_SCHEDULE:-warmup_flat}"  # warmup_flat | warmup_cosine | noam. noam = every run before 2026-10-20 (effective lr 1e-6 regardless of LEARNING_RATE)
+export WARMUP_STEPS="${WARMUP_STEPS:-200}"
 export WEIGHT_DECAY="${WEIGHT_DECAY:-1e-3}"
 export BATCH_SIZE="${BATCH_SIZE:-4}"
 export GRAD_ACCUM="${GRAD_ACCUM:-2}"
@@ -55,6 +57,7 @@ export TRAIN_DECODER="${TRAIN_DECODER:-0}"   # 1 -> also unfreeze decoder (with 
 export LORA="${LORA:-0}"          # 1 -> freeze everything, train only a bottleneck adapter (overrides UNFREEZE_ENCODER_LAYERS/TRAIN_DECODER)
 export LORA_DIM="${LORA_DIM:-32}"
 export LORA_DROPOUT="${LORA_DROPOUT:-0.0}"
+export LORA_TRAIN_DECODER="${LORA_TRAIN_DECODER:-0}"  # 1 -> with LORA=1, also train the RNN-T decoder+joint (encoder stays frozen apart from adapters)
 export SPECAUG="${SPECAUG:-1}"
 export SEED="${SEED:-}"           # set an int for reproducible runs
 export NUM_WORKERS="${NUM_WORKERS:-2}"
@@ -81,6 +84,7 @@ SPEED_PERTURB_FLAG=""
 [[ "${SPEED_PERTURB}" == "1" ]] && SPEED_PERTURB_FLAG="--speed-perturb"
 LORA_FLAG=""
 [[ "${LORA}" == "1" ]] && LORA_FLAG="--lora --lora-dim ${LORA_DIM} --lora-dropout ${LORA_DROPOUT}"
+[[ "${LORA}" == "1" && "${LORA_TRAIN_DECODER}" == "1" ]] && LORA_FLAG="${LORA_FLAG} --lora-train-decoder"
 
 OUT="${EXP_DIR}/${EXP_NAME}"
 
@@ -132,6 +136,8 @@ fi
   --output-dir "${OUT}" \
   --epochs "${EPOCHS}" \
   --learning-rate "${LEARNING_RATE}" \
+  --lr-schedule "${LR_SCHEDULE}" \
+  --warmup-steps "${WARMUP_STEPS}" \
   --weight-decay "${WEIGHT_DECAY}" \
   --decoder-joint-lr-scale "${DECODER_JOINT_LR_SCALE}" \
   --val-every-n-epochs "${VAL_EVERY_N_EPOCHS}" \

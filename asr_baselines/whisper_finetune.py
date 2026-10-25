@@ -49,6 +49,11 @@ def parse_args():
     p.add_argument("--output-dir", required=True)
     p.add_argument("--language", default="english")
     p.add_argument("--task", default="transcribe")
+    p.add_argument("--label-prefix", choices=["lang_task", "legacy"], default="lang_task",
+                   help="lang_task: labels carry <lang><task><notimestamps>, so training sees the decoder prompt "
+                        "used at inference (<sot><lang><task><notimestamps>). legacy: runs before 2026-10-20, where "
+                        "the fast tokenizer's post-processor ignored language/task and the collator never stripped "
+                        "<sot>, so training saw <sot><sot><notimestamps> instead")
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--max-steps", type=int, default=-1)
     p.add_argument("--learning-rate", type=float, default=1e-5)
@@ -73,6 +78,23 @@ def parse_args():
     p.add_argument("--unfreeze-conv", action="store_true",
                    help="also train the conv stem (conv1/conv2); Green trains only the 5 layers")
     p.add_argument("--train-decoder", action="store_true", help="also unfreeze the decoder (off = Green)")
+    # LoRA: freeze the base and train only low-rank adapters on the attention
+    # projections (peft). Mutually exclusive with the Green freeze / full-FT
+    # path -- when --lora is set, apply_freeze is skipped and peft owns the
+    # requires_grad bookkeeping. The adapter is merged back into the base
+    # weights at save time so the downstream bit-exact OpenAI-format converter
+    # and SimulStreaming eval see a plain WhisperForConditionalGeneration,
+    # identical in shape to a full-FT checkpoint. Note: this is the FIRST LoRA
+    # run against SimulStreaming pseudo-streaming -- the earlier LoRA numbers
+    # were all on the CarelessWhisper causal-streaming codebase, small/large-v2.
+    p.add_argument("--lora", action="store_true",
+                   help="LoRA finetune (peft) instead of full-FT/Green freeze; adapter is "
+                        "merged into the base at save time")
+    p.add_argument("--lora-rank", type=int, default=32)
+    p.add_argument("--lora-alpha", type=int, default=64)
+    p.add_argument("--lora-dropout", type=float, default=0.0)
+    p.add_argument("--lora-target-modules", default="q_proj,k_proj,v_proj,out_proj",
+                   help="comma-separated attention projection names to adapt")
     # SpecAugment (Whisper built-in). Green-leaning defaults: heavy time, light freq.
     p.add_argument("--no-specaug", action="store_true", help="ablation: disable SpecAugment")
     p.add_argument("--speed-perturb", action="store_true",
@@ -221,8 +243,9 @@ class WhisperPatientDataset(torch.utils.data.Dataset):
 
 
 class DataCollatorSpeechSeq2Seq:
-    def __init__(self, processor):
+    def __init__(self, processor, strip_token_id):
         self.processor = processor
+        self.strip_token_id = strip_token_id
 
     def __call__(self, features):
         input_features = [{"input_features": f["input_features"]} for f in features]
@@ -230,8 +253,8 @@ class DataCollatorSpeechSeq2Seq:
         label_features = [{"input_ids": f["labels"]} for f in features]
         labels_batch = self.processor.tokenizer.pad(label_features, return_tensors="pt")
         labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
-        # strip the leading BOS the model prepends itself
-        if (labels[:, 0] == self.processor.tokenizer.bos_token_id).all().cpu().item():
+        # strip the leading token the model prepends itself when shifting labels right
+        if (labels[:, 0] == self.strip_token_id).all().cpu().item():
             labels = labels[:, 1:]
         batch["labels"] = labels
         return batch
@@ -252,6 +275,14 @@ def main():
 
     processor = WhisperProcessor.from_pretrained(args.model, language=args.language, task=args.task)
     model = WhisperForConditionalGeneration.from_pretrained(args.model)
+    if args.label_prefix == "lang_task":
+        # The fast tokenizer stores language/task but only set_prefix_tokens rewrites its post-processor.
+        processor.tokenizer.set_prefix_tokens(language=args.language, task=args.task, predict_timestamps=False)
+        strip_id = model.config.decoder_start_token_id
+    else:
+        strip_id = processor.tokenizer.bos_token_id  # <|endoftext|>, never first: <sot> stays in the labels
+    probe = processor.tokenizer(text="a").input_ids
+    print(f"label prefix {args.label_prefix}: labels start {probe[:4]}, collator strips {strip_id}")
     # English transcription, no forced language prefix to overfit against.
     model.generation_config.language = args.language
     model.generation_config.task = args.task
@@ -262,7 +293,31 @@ def main():
     model.config.use_cache = False  # required with gradient_checkpointing
 
     configure_specaug(model, args)
-    apply_freeze(model, args)
+    if args.lora:
+        from peft import LoraConfig, get_peft_model
+        targets = [t.strip() for t in args.lora_target_modules.split(",") if t.strip()]
+        # No task_type: SEQ_2_SEQ_LM makes peft wrap this as a T5-style text
+        # model that feeds input_ids, but Whisper's forward takes input_features
+        # (encoder) + decoder_input_ids. A plain PeftModel just proxies forward
+        # with whatever kwargs the Seq2SeqTrainer passes, which is correct here.
+        lora_cfg = LoraConfig(
+            r=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            target_modules=targets,
+            bias="none",
+        )
+        model = get_peft_model(model, lora_cfg)
+        # PEFT + gradient checkpointing on a frozen base: the input embeddings
+        # produce no-grad activations, so checkpointing has no requires_grad
+        # tensor to rebuild the graph from unless we force one at the input.
+        model.enable_input_require_grads()
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in model.parameters())
+        print(f"LoRA: rank={args.lora_rank} alpha={args.lora_alpha} targets={targets}; "
+              f"trainable {trainable/1e6:.2f}M / {total/1e6:.2f}M ({trainable/total:.2%})")
+    else:
+        apply_freeze(model, args)
 
     if args.buffer_truncation_prob > 0.0 and not args.aligned_csv:
         raise SystemExit("--buffer-truncation-prob needs --aligned-csv (the target text must be "
@@ -290,7 +345,7 @@ def main():
                                      truncation_seed=args.seed)
     # val stays whole-utterance: checkpoint selection is on offline val WER
     val_ds = WhisperPatientDataset(val_ex, processor, args.max_label_length)
-    collator = DataCollatorSpeechSeq2Seq(processor)
+    collator = DataCollatorSpeechSeq2Seq(processor, strip_id)
 
     def compute_metrics(pred):
         pred_ids = pred.predictions
@@ -348,8 +403,16 @@ def main():
         processing_class=processor,
     )
     trainer.train()
-    trainer.save_model(os.path.join(args.output_dir, "best"))
-    processor.save_pretrained(os.path.join(args.output_dir, "best"))
+    best_dir = os.path.join(args.output_dir, "best")
+    if args.lora:
+        # load_best_model_at_end has restored the best adapter into trainer.model;
+        # fold it into the base and save a plain WhisperForConditionalGeneration
+        # so the downstream converter/eval are byte-for-byte agnostic to LoRA.
+        merged = trainer.model.merge_and_unload()
+        merged.save_pretrained(best_dir)
+    else:
+        trainer.save_model(best_dir)
+    processor.save_pretrained(best_dir)
     metrics = trainer.evaluate()
     print("Final val:", {k: metrics[k] for k in metrics if "wer" in k or "cer" in k or "loss" in k})
 

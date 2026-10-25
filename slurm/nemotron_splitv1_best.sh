@@ -44,6 +44,9 @@ EPOCHS="${EPOCHS:-210}"
 SEEDS="${SEEDS:-1 2 3}"
 RESUME_CKPT="${RESUME_CKPT:-}"
 SPEED_PERTURB="${SPEED_PERTURB:-1}"
+# The 10.76% headline trained under the pretrained NoamAnnealing schedule, whose effective LR was a flat 1e-6 (not
+# the LEARNING_RATE=1e-4 below); noam reproduces it. LR_SCHEDULE=warmup_flat gives a real 1e-4 (2026-10-20).
+LR_SCHEDULE="${LR_SCHEDULE:-noam}"
 
 TRAIN_FILE="${LABELS_DIR}/merged_train_spm1023.csv"
 VAL_FILE="${LABELS_DIR}/merged_val_spm1023.csv"
@@ -63,17 +66,17 @@ for domain in legal legacy merged; do
   done
 done
 
-# NOTE: slurm/_patient_data.sh's `merged` branch unconditionally resets
-# ROOT_DIR to its own MERGED_ROOT default, ignoring the override below --
-# harmless here only because that default's symlinks point at the same
-# source directories as split_v1's, confirmed by inspection. The printed
-# ROOT_DIR= line in the job log will show MERGED_ROOT, not SPLIT_ROOT; that
-# is expected, not a bug in this script.
+# NOTE (obsolete as of 23305f1): _patient_data.sh's `merged` branch used to
+# unconditionally reset ROOT_DIR to its own MERGED_ROOT default, ignoring the
+# override below -- harmless only because that default's symlinks point at the
+# same source directories as split_v1's. It now honours a caller-supplied
+# ROOT_DIR and logs the override. Job logs from before that fix show
+# ROOT_DIR=MERGED_ROOT; that was expected then, not a bug in this script.
 SUFFIX=""
 [[ "${SPEED_PERTURB}" == "1" ]] && SUFFIX="_speedperturb"
 
 for seed in ${SEEDS}; do
   sbatch --account="${ACCOUNT}" \
-    --export=ALL,RUN_DATA_MODE=merged,ROOT_DIR="${SPLIT_ROOT}",TRAIN_FILE="${TRAIN_FILE}",VAL_FILE="${VAL_FILE}",TEST_FILE="${TEST_FILE}",UNFREEZE_ENCODER_LAYERS=-1,TRAIN_DECODER=1,BATCH_SIZE=2,GRAD_ACCUM=2,LEARNING_RATE=1e-4,EPOCHS="${EPOCHS}",SEED="${seed}",SPEED_PERTURB="${SPEED_PERTURB}",RESUME_CKPT="${RESUME_CKPT}",EXP_NAME="nemotron_fullft_epochs${EPOCHS}_splitv1merged_seed${seed}${SUFFIX}" \
+    --export=ALL,RUN_DATA_MODE=merged,ROOT_DIR="${SPLIT_ROOT}",TRAIN_FILE="${TRAIN_FILE}",VAL_FILE="${VAL_FILE}",TEST_FILE="${TEST_FILE}",UNFREEZE_ENCODER_LAYERS=-1,TRAIN_DECODER=1,BATCH_SIZE=2,GRAD_ACCUM=2,LEARNING_RATE=1e-4,LR_SCHEDULE="${LR_SCHEDULE}",EPOCHS="${EPOCHS}",SEED="${seed}",SPEED_PERTURB="${SPEED_PERTURB}",RESUME_CKPT="${RESUME_CKPT}",EXP_NAME="nemotron_fullft_epochs${EPOCHS}_splitv1merged_seed${seed}${SUFFIX}" \
     "${PROJECT_ROOT}/slurm/nemotron_finetune.sbatch"
 done

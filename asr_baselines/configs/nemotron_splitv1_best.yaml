@@ -32,7 +32,7 @@ model:
   finetune_mode: full            # unfreeze_encoder_layers=-1, train_decoder=1 (encoder+decoder+joint all trainable)
 
 optim:
-  learning_rate: 1e-4            # flat, single LR for the whole model
+  learning_rate: 1e-4            # configured; EFFECTIVE lr was a flat 1e-6 (pretrained NoamAnnealing clamps to min_lr; found 2026-10-14, LR_SCHEDULE=noam reproduces)
   weight_decay: 1e-3             # script default, never swept on this split
   warmup_steps: 200              # script default, never swept on this split
   batch_size: 2

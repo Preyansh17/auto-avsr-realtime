@@ -78,8 +78,11 @@ export SEED
 
 echo
 echo "########## 1/4 train (warmup=25, weight_decay=0.01, lr=1e-5, 30 epochs)"
+# LABEL_PREFIX=legacy reproduces the 7.62% headline (trained on <sot><sot><notimestamps>, see
+# whisper_finetune.py --label-prefix); lang_task is the 2026-10-20 fix.
 "${WHISPER_PY}" -m asr_baselines.whisper_finetune \
   --model "${MODEL}" \
+  --label-prefix "${LABEL_PREFIX:-legacy}" \
   --root-dir "${ROOT_DIR}" \
   --train-file "${TRAIN_FILE}" \
   --val-file "${VAL_FILE}" \

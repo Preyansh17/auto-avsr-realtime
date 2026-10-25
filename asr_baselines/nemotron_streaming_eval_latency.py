@@ -37,6 +37,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from asr_baselines.metrics import compute_wer_cer  # noqa: E402
+from asr_baselines.nemotron_restore import restore_asr_model  # noqa: E402
 
 
 def read_manifest(path):
@@ -73,10 +74,11 @@ def main():
     from nemo.collections.asr.parts.utils.streaming_utils import CacheAwareStreamingAudioBuffer
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    if args.model.endswith(".nemo") and os.path.isfile(args.model):
-        model = nemo_asr.models.ASRModel.restore_from(args.model, map_location=device)
-    else:
-        model = nemo_asr.models.ASRModel.from_pretrained(args.model, map_location=device)
+    # Handles adapter/LoRA checkpoints, which NeMo's plain restore_from()
+    # cannot load -- see asr_baselines/nemotron_restore.py for the root cause.
+    # (No map_location here; restore_asr_model re-homes the model itself, and
+    # the .to(device) below is what actually places it.)
+    model = restore_asr_model(args.model)
     model.eval()
     model = model.to(device)
 

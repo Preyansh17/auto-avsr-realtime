@@ -41,6 +41,15 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--learning-rate", type=float, default=1e-4)
     p.add_argument("--warmup-steps", type=int, default=200)
+    p.add_argument("--lr-schedule", choices=["warmup_flat", "warmup_cosine", "noam"], default="warmup_flat",
+                   help="warmup_flat: linear warmup over --warmup-steps optimizer steps, then constant "
+                        "--learning-rate (NeMo WarmupPolicy). warmup_cosine: same warmup, cosine decay to "
+                        "--min-lr. noam: the pretrained config's NoamAnnealing (d_model 1024, min_lr 1e-6), "
+                        "which scales --learning-rate by d_model^-0.5 * warmup^-0.5 (~2.2e-3 at warmup 200): "
+                        "lr 1e-4 peaks at 2.2e-7 and is then clamped to min_lr, so every run before "
+                        "2026-10-20 trained at an effective flat 1e-6 whatever --learning-rate said. "
+                        "Use noam only to reproduce those runs.")
+    p.add_argument("--min-lr", type=float, default=0.0, help="floor for warmup_cosine")
     p.add_argument("--weight-decay", type=float, default=1e-3)
     p.add_argument("--decoder-joint-lr-scale", type=float, default=1.0,
                    help="scale factor applied to --learning-rate for the "
@@ -99,6 +108,17 @@ def parse_args():
     p.add_argument("--lora-dim", type=int, default=32,
                    help="adapter bottleneck dimension")
     p.add_argument("--lora-dropout", type=float, default=0.0)
+    # Plain --lora freezes the RNN-T decoder and joint along with the encoder,
+    # so the entire healthy->dysarthric domain shift has to be absorbed by
+    # encoder-side adapters. The dim=32 LR probe (2026-07-31) suggests that is
+    # the binding constraint, not the LR: 1e-4/5e-4/1e-3 landed within 0.9pp of
+    # each other (0.2679/0.2768/0.2768 val_wer) while full finetune reached
+    # 0.1875 in half the epochs. This flag keeps the frozen encoder but lets the
+    # decoder+joint adapt, which separates "adapter capacity is too small" from
+    # "the frozen decoder is what hurts".
+    p.add_argument("--lora-train-decoder", action="store_true",
+                   help="with --lora: also train the RNN-T decoder and joint "
+                        "(encoder still frozen apart from its adapters)")
     # Cache-aware streaming context (left,right) in frames; keep model default if unset.
     p.add_argument("--att-context-size", type=int, nargs=2, default=None,
                    help="e.g. 70 13 ; default keeps the pretrained streaming context")
@@ -114,6 +134,24 @@ def parse_args():
                         "shown large unseeded run-to-run WER variance; seed + multi-seed runs are "
                         "needed to measure anything.")
     return p.parse_args()
+
+
+def make_lr_log_callback(warmup_steps):
+    """Print the optimizer's actual learning rate at a few optimizer steps, so the effective schedule is in the log
+    (the configured --learning-rate was silently not the effective one until 2026-10-20)."""
+    import lightning.pytorch as pl
+
+    marks = {1, warmup_steps // 2, warmup_steps, warmup_steps + 1, 2 * warmup_steps}
+
+    class LRLog(pl.Callback):
+        def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+            s = trainer.global_step
+            if (s in marks or (s > 0 and s % 5000 == 0)) and getattr(self, "_last", None) != s:
+                self._last = s
+                lrs = sorted({f"{g['lr']:.3g}" for g in trainer.optimizers[0].param_groups})
+                print(f"[lr] optimizer step {s}: lr={','.join(lrs)}", flush=True)
+
+    return LRLog()
 
 
 def make_save_best_wer_callback(out_path):
@@ -156,7 +194,12 @@ def make_save_best_wer_callback(out_path):
             print(f"[resume] SaveBestWER restored best_wer={self.best_wer:.4f} "
                   f"-- will only overwrite {self.out_path} on a genuine improvement")
 
-        def on_validation_epoch_end(self, trainer, pl_module):
+        # on_validation_end, not on_validation_epoch_end: Lightning runs callback epoch-end hooks before the
+        # module's, and NeMo logs val_wer in the module hook, so at epoch-end callback_metrics still held the
+        # previous epoch's val_wer and the saved weights were one epoch past the best.
+        def on_validation_end(self, trainer, pl_module):
+            if trainer.sanity_checking:
+                return
             wer = trainer.callback_metrics.get("val_wer")
             if wer is None:
                 return
@@ -224,10 +267,17 @@ def apply_lora(model, args):
     The base EncDecRNNTBPEModel's encoder (plain ConformerEncoder) doesn't
     implement the adapter mixin -- replace_adapter_compatible_modules() swaps
     it in-place for ConformerEncoderAdapter (same weights, adapter-capable
-    subclass) before add_adapter() can be called. NeMo's own restore_from
-    handles reconstructing this from a saved .nemo's cfg.adapters section
-    (ASRAdapterModelMixin.setup_adapters(), called at model construction time),
-    so nemotron_eval.py needs no special-casing to load a LoRA checkpoint.
+    subclass) before add_adapter() can be called.
+
+    Loading the result back is NOT symmetric. An earlier version of this
+    docstring claimed NeMo's own restore_from() reconstructs the adapters from
+    the saved .nemo's cfg.adapters section, so the eval scripts needed no
+    special-casing. That is wrong: setup_adapters() runs inside
+    EncDecRNNTBPEModel.__init__, before anything has swapped the encoder for
+    the adapter-capable subclass, so it dies with "'ConformerEncoder' object
+    has no attribute 'add_adapter'". Every eval path therefore goes through
+    asr_baselines/nemotron_restore.py, which strips cfg.adapters, restores,
+    swaps the encoder, re-declares the adapters, and reloads their weights.
     """
     from nemo.collections.common.parts.adapter_modules import LinearAdapterConfig
 
@@ -241,10 +291,19 @@ def apply_lora(model, args):
     )
     model.add_adapter(name="lora", cfg=cfg)
     model.unfreeze_enabled_adapters()
+    # Order matters: unfreeze_enabled_adapters() is what re-enables grads after
+    # the blanket freeze above, so the decoder/joint unfreeze has to come after
+    # it, not before.
+    if args.lora_train_decoder:
+        for module in (model.decoder, model.joint):
+            for prm in module.parameters():
+                prm.requires_grad = True
+    scope = ("decoder+joint TRAINABLE" if args.lora_train_decoder
+             else "decoder+joint frozen")
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
     print(f"LoRA: bottleneck adapter dim={args.lora_dim} on all encoder layers "
-          f"(decoder+joint frozen); "
+          f"({scope}); "
           f"trainable {trainable/1e6:.2f}M / {total/1e6:.2f}M ({trainable/total:.1%})")
 
 
@@ -264,7 +323,7 @@ def main():
     # EncDecRNNTBPEModel" since the isinstance check fails across packages.
     # Confirmed via ASRModel.__mro__ on the installed nemo_toolkit 2.7.3.
     import lightning.pytorch as pl
-    from omegaconf import open_dict
+    from omegaconf import OmegaConf, open_dict
 
     os.makedirs(args.output_dir, exist_ok=True)
     model = nemo_asr.models.ASRModel.from_pretrained(args.model)
@@ -384,9 +443,20 @@ def main():
         # Python-loop implementation avoids that code path entirely.
         model.cfg.optim.foreach = False
         model.cfg.optim.fused = False
-        if "sched" in model.cfg.optim and model.cfg.optim.sched is not None:
-            model.cfg.optim.sched.warmup_steps = args.warmup_steps
-            model.cfg.optim.sched.max_steps = max_steps
+        # The scheduler steps once per OPTIMIZER step (Lightning interval "step"), i.e. per grad_accum batches.
+        opt_steps = max(1, max_steps // args.grad_accum)
+        if args.lr_schedule == "noam":
+            if "sched" in model.cfg.optim and model.cfg.optim.sched is not None:
+                model.cfg.optim.sched.warmup_steps = args.warmup_steps
+                model.cfg.optim.sched.max_steps = max_steps
+        elif args.lr_schedule == "warmup_flat":
+            # WarmupPolicy drops to min_lr past max_steps; the step estimate above is approximate (Lhotse dynamic
+            # batching), so give it 2x headroom rather than risk a tail at lr 0.
+            model.cfg.optim.sched = OmegaConf.create({"name": "WarmupPolicy", "warmup_steps": args.warmup_steps,
+                                                      "max_steps": 2 * opt_steps, "min_lr": 0.0})
+        else:
+            model.cfg.optim.sched = OmegaConf.create({"name": "CosineAnnealing", "warmup_steps": args.warmup_steps,
+                                                      "max_steps": opt_steps, "min_lr": args.min_lr})
         # Differential decoder/joint LR: NeMo's ModelPT.setup_optimizer_param_groups
         # (called internally by setup_optimization) natively reads
         # cfg.optim_param_groups -- a dict keyed by top-level model attribute
@@ -406,7 +476,9 @@ def main():
               f"decoder+joint @ lr={args.learning_rate * args.decoder_joint_lr_scale} "
               f"(scale={args.decoder_joint_lr_scale})")
     model.setup_optimization(model.cfg.optim)
-    print(f"train examples={num_train_examples} steps_per_epoch={steps_per_epoch} max_steps={max_steps}")
+    print(f"train examples={num_train_examples} steps_per_epoch={steps_per_epoch} max_steps={max_steps} "
+          f"(optimizer steps ~{max_steps // args.grad_accum}) lr_schedule={args.lr_schedule} "
+          f"sched={OmegaConf.to_container(model.cfg.optim.sched) if model.cfg.optim.get('sched') else None}")
 
     best_out = os.path.join(args.output_dir, "nemotron_best.nemo")
     best_wer_cb = make_save_best_wer_callback(best_out)
@@ -424,7 +496,7 @@ def main():
               f"(~{args.epochs // args.val_every_n_epochs} checkpoint-selection "
               f"points over {args.epochs} epochs)")
 
-    callbacks = [best_wer_cb]
+    callbacks = [best_wer_cb, make_lr_log_callback(args.warmup_steps)]
     if args.ckpt_every_n_epochs > 1:
         # Replace Lightning's implicit every-validation-epoch ModelCheckpoint
         # with an explicit, less frequent one. Passing any ModelCheckpoint in
