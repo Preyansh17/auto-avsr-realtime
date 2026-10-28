@@ -122,3 +122,86 @@ sentences share words ("can i", "i need") across folds, which is the intended tr
 Fold clips filtered (`filter_fold.py`; fixed dedup key prompt_id->audio_path, which had collapsed 300 clips to 25): foldA 292 kept/300, foldB 279/288.
 20 jobs submitted (NF/ONF x fold A/B x seeds 1-5, torch_pr_60_tandon_priority, l40s_public, ids 20919428-20919454, `/scratch/pa2753/asr_aug/jobs.txt`).
 Analysis: `asr_aug/report_h2.py` (untested until runs finish; run on torch with whisper_asr python).
+
+## 3. Tianyu's track vs ours, and remaining plan (rewritten 2026-10-26 after reading the whole page)
+Full transcription: `docs/investigations/tianyu_notion_2026-10-26.md`. The first version of this section (2026-10-25) was
+based on the top 4 images only and was wrong in places: Tianyu does run seeds (3) and intervals, has done semg2/semg3,
+streaming, and a demo. Same split rows as ours (large-v3 zero-shot semg1 test30 85.2 on both).
+
+### 3.1 Scoreboard (WER %, test30 / OOV)
+| | Tianyu best | Ours best | gap |
+|---|---|---|---|
+| semg1 | 4.1 / 10.0 (encoder-only + old data; weight avg 4.5 / 12.4, vote 3.9 / 10.3) | 7.0 ± 2.5 / 22.0 ± 2.8 (full FT N / ONS, 10 seeds) | behind on both, ~12 pp on OOV |
+| semg2 | 0.6 / 2.7 (L3 full FT + zero-shot Higgs); Nemotron + both Higgs 3.0 / 2.1 | 0.6 / 5.7 (legacy prefix) | behind ~3 pp on OOV |
+| semg3 | 0.59 / 4.24 (USR 2.0 lip reading + video aug + old semg1, α=0.75) | none | not started |
+| streaming | semg1 9.7 / 16.4 at 1.04 s; semg3 1.97 / 5.12 at 1.28 s; Mac/iPhone demo | patient: none (merged split only) | behind |
+| TORGO | real 20.6, hybrid 18.5 (Whisper-medium, single runs) | Nemotron sentences 20.05 ± 0.14 on a harder text-disjoint split | about level |
+
+### 3.2 What Tianyu has already closed (do not redo)
+encoder-only vs full FT vs LoRA, lr 5e-6 / 1e-5 / 2e-5, 30 vs 60 epochs, Adafactor, large-v2, first/last 16 layers,
+add TORGO, drop old recordings, synthetic pool 512 vs 20k, zero-shot vs fine-tuned Higgs, weight averaging, voting,
+data scaling (flat by 60-180 sentences), cross-patient transfer, AV-HuBERT / Auto-AVSR / Parakeet / Canary / Qwen2-Audio /
+Granite zoo, semg3 audio (32.5 / 61.8, useless) vs lips (2.4 / 11.8), streaming chunk sizes.
+This drops my earlier T3 (find the patient set: same split), T4 (semg3 audio baseline: done, video wins) and T5 (latency: done).
+
+### 3.3 What is left that Tianyu has not done (ordered)
+Each one is grounded in a gap the page states or a result it shows.
+1. **Contextual biasing / LM fusion for unseen words (decode-only, ~4 GPU-h).** The page says errors are
+   very consistent across Whisper variants (so more ensembling has a ceiling) and lists "personalised phrase completion" as
+   future work. Not in Tianyu's ablations. Apply to Tianyu-style best checkpoints we reproduce (encoder-only + old data):
+   (a) shallow fusion with an n-gram LM over the patient's sentence material plus the 10k corpus, (b) Whisper prompt /
+   keyword biasing with a caregiver word list, (c) N-best rescoring with a small LLM. OOV is the target; test30 must not
+   get worse. Bar: semg1 OOV < 10.0, semg2 OOV < 2.1. 5 seeds of the base model, paired bootstrap.
+2. **Audio-conditioned synthetic video for semg3 (~1-2 GPU-days).** Page: synthetic video "so far not successful as they
+   need audio as conditions, which semg3 doesn't have". We have Higgs TTS: synthesize audio for new sentences (generic or
+   semg1/semg2-adapted voice, or a voice matched to semg3's mouth timing), drive a lip-sync generator on semg3 face crops,
+   add the clips to USR 2.0 training. Bar: semg3 OOV50 < 4.24. Gate first: generated mouth crops must be readable by the
+   current semg3 lip model (its WER on synthetic clips < 30%) before any training.
+3. **Stack the separately-winning semg1 ingredients, 5 seeds (~1 GPU-day).** encoder-only + old data + both patients +
+   fine-tuned Higgs synthetic (13.0 single run) + weight averaging (12.4) + vote (10.3). It is not clear from the page whether
+   the 10.0 headline already stacks all of them; the run confirms or improves it, with an interval. Prerequisite for item 1
+   (we need that checkpoint family locally).
+4. **TORGO at paper scale (old T2, ~1.5 GPU-days), lower priority.** Tianyu's TORGO is a single-run replication; our
+   per-speaker Higgs adapters plus 5-15 h LibriSpeech text, 5 seeds. Note: Tianyu found TORGO doesn't help the patients,
+   so this is only a TORGO benchmark result.
+
+### 3.4 Closed (ours)
+H2 target-vocab synthetic (null); semg2 per-patient vs pooled (floor); earlier list in 1.2.
+
+### 3.5 Shared-split eval set up (2026-10-26)
+Splits are Tianyu's own tree (th3482 = Tianyu He): our s1/s2 labels are `LATEST_combined/roles/s{1,2}_*` (now combined_v6), so the rows are already shared.
+Built `asr_aug/shared_eval/score_shared.py` (refs from the role file; aborts on row mismatch); validated: N s1_test 6.98 = report 7.0. Our table in `asr_aug/shared_eval/README.md`.
+Side results: multi-patient (section 2) runs finished. semg2 is near the floor (large-v3 FT s2_test 0.6-1.2%, oov 5.7-6.0%); pooled s1+s2 no different on s2; the prompt choice doesn't matter on s2.
+Large-v3 zero-shot s1_test 85% vs Tianyu's medium zero-shot 0.631 on "Patient", so Tianyu's patient set probably is not s1_test.
+
+### 3.6 Results: item 3 (stack, 5 seeds) and item 1 (contextual biasing), 2026-10-28
+Design and amendment: `asr_aug/stack/README.md`. Full outputs: `asr_aug/stack/results/report_{stack,bias}.out`.
+Large-v3 encoder-only, seeds 1-5. E1 = old split_v1 + s1_train. E2 = E1 + s2_train + 397 Higgs clips (semg1 old-adapter 138, Oct 1 adapter 139, semg2 adapter 120).
+
+**Item 3: stacking helps semg1 OOV (primary passes).** Val-selected checkpoint, WER % test / OOV:
+| system | s1 (semg1) | s2 (semg2) |
+|---|---|---|
+| E1 single (mean ± sd) | 5.09 ± 2.24 / 21.17 ± 2.14 | 11.60 / 18.33 (not trained on s2) |
+| E2 single | 7.57 ± 1.35 / 15.16 ± 2.23 | 0.59 / 2.63 |
+| E2 soup (5-seed weight average) | 7.10 / **8.07** | 0.59 / **1.75** |
+| E2 MBR vote | 7.10 / 9.87 | 0.59 / 1.75 |
+| Tianyu best | 4.1 / 10.0 | 0.6 / 2.7 (Nemotron 3.0 / 2.1) |
+- Primary E2 - E1, s1_oov, single seeds: **-6.01 pp [-11.62, -0.98], p 0.020**. Last epoch agrees: -6.46 [-11.24, -2.07].
+- s1_test: E2 - E1 +2.49 [-0.81, +6.86], so no test gain (test is near its floor, 30 sentences).
+- Soup beats single seeds on s1_oov in both arms: E2 -7.09 [-11.43, -3.08], E1 -5.02 [-10.28, -0.60]. MBR also helps on E2 (-5.29) but less than the soup.
+- E2 soup beats Tianyu's bar on semg1 OOV (8.07 vs 10.0) and semg2 OOV (1.75 vs 2.1/2.7). It is still behind on semg1 test (7.10 vs 4.1). Descriptive only: one soup model, 49 OOV sentences; Tianyu's numbers are single runs.
+- E2 changes two things (semg2 real + synthetic), so the gain cannot be split between them.
+- Synthetic filter caveat: the s1 judge kept only 31%/45% of the new semg1 clips and probably favours easy sentences.
+
+**Item 1: no biasing method helps (all primaries fail).** Clean method - beam, s1_oov, single seeds, Holm over 3:
+| arm | prompt | n-gram fusion | LLM rescoring |
+|---|---|---|---|
+| E1 | +35.96 [+0.45, +106.95], Holm 0.11 | +2.51 [-1.35, +6.55], 0.37 | +0.36 [-2.97, +3.55], 0.83 |
+| E2 | +11.57 [-3.41, +68.79], 0.96 | +25.29 [-0.42, +102.91], 0.21 | +11.48 [-3.98, +67.31], 0.96 |
+- On the best system (E2 soup) every method is no better than plain beam on s1_oov (beam 8.07; prompt 9.42, LLM 8.52 / words 8.07). The words condition (OOV words given) does not help either.
+- The main failure is repetition loops, which push WER past 100%:
+  - Prompt biasing with the full word list (words condition) loops often: 17 loops on E1 s1_oov over 5 seeds.
+  - n-gram fusion loops grow with lam (E1 s1_oov 0/0/6/15 loops at lam 0.1/0.2/0.3/0.5). On E2 it loops even at lam 0.1 (E2 s2_oov: 8 loops, mean WER 89.9 vs beam 2.7). E2_seed5's val picked lam 0.3.
+  - LLM rescoring is near-neutral at mu <= 0.025. Higher mu picks looped 10-best candidates (E2 s2_oov 2.7 at mu 0.025, 52 at mu 0.1). The mean token log-prob rewards repetition.
+- Amendment 1 (finer mu grid) changed LLM from clearly harmful to neutral; it did not make it help.
+- Possible follow-up (not pre-registered): loop guards (no-repeat n-gram, EOS-aware fusion, a length or repetition penalty on the LLM score). The gain available is small: E2 soup beam is already 8.07 on s1_oov.

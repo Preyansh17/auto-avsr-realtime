@@ -1,0 +1,107 @@
+Selected lam / mu per run (val):
+  E1_seed1: lam {'clean': 0.1, 'words': 0.1}  mu {'clean': 0.01, 'words': 0.01}
+  E1_seed2: lam {'clean': 0.1, 'words': 0.1}  mu {'clean': 0.1, 'words': 0.05}
+  E1_seed3: lam {'clean': 0.1, 'words': 0.1}  mu {'clean': 0.025, 'words': 0.025}
+  E1_seed4: lam {'clean': 0.1, 'words': 0.1}  mu {'clean': 0.01, 'words': 0.01}
+  E1_seed5: lam {'clean': 0.1, 'words': 0.1}  mu {'clean': 0.025, 'words': 0.025}
+  E1_soup: lam {'clean': 0.1, 'words': 0.1}  mu {'clean': 0.1, 'words': 0.1}
+  E2_seed1: lam {'clean': 0.1, 'words': 0.1}  mu {'clean': 0.1, 'words': 0.01}
+  E2_seed2: lam {'clean': 0.1, 'words': 0.1}  mu {'clean': 0.25, 'words': 0.25}
+  E2_seed3: lam {'clean': 0.1, 'words': 0.1}  mu {'clean': 0.05, 'words': 0.05}
+  E2_seed4: lam {'clean': 0.1, 'words': 0.1}  mu {'clean': 0.01, 'words': 0.01}
+  E2_seed5: lam {'clean': 0.3, 'words': 0.3}  mu {'clean': 0.01, 'words': 0.01}
+  E2_soup: lam {'clean': 0.1, 'words': 0.1}  mu {'clean': 0.25, 'words': 0.25}
+
+WER % (single: mean ± sd over seeds; soup: one model). Bar: Tianyu s1_oov 10.0, s2_oov 2.1
+| arm | system | method | bias | s1_test | s1_oov | s2_test | s2_oov | loops (s1_test/s1_oov/s2_test/s2_oov) |
+|---|---|---|---|---|---|---|---|---|
+| E1 | single (5) | beam | none | 5.21 ± 2.15 | 20.81 ± 1.54 | 9.94 ± 2.82 | 17.89 ± 4.67 | 0/0/0/0 |
+| E1 | single (5) | prompt | clean | 20.24 ± 32.08 | 56.77 ± 31.77 | 25.92 ± 32.56 | 32.89 ± 28.39 | 1/3/1/1 |
+| E1 | single (5) | prompt | words | 77.87 ± 90.35 | 211.12 ± 122.32 | 113.85 ± 110.25 | 306.49 ± 157.32 | 5/17/7/27 |
+| E1 | single (5) | ngram | clean | 4.73 ± 2.05 | 23.32 ± 1.49 | 9.70 ± 2.60 | 20.61 ± 5.65 | 0/0/0/0 |
+| E1 | single (5) | ngram | words | 4.73 ± 2.05 | 22.96 ± 1.32 | 9.70 ± 2.60 | 20.44 ± 5.90 | 0/0/0/0 |
+| E1 | single (5) | llm | clean | 4.85 ± 2.15 | 21.17 ± 1.66 | 9.82 ± 2.89 | 17.81 ± 4.51 | 0/0/0/0 |
+| E1 | single (5) | llm | words | 4.85 ± 2.15 | 21.17 ± 1.66 | 9.82 ± 2.89 | 17.81 ± 4.51 | 0/0/0/0 |
+| E1 | soup (1) | beam | none | 5.92 | 14.80 | 8.28 | 16.23 | 0/0/0/0 |
+| E1 | soup (1) | prompt | clean | 5.92 | 16.14 | 8.88 | 70.18 | 0/0/0/1 |
+| E1 | soup (1) | prompt | words | 5.92 | 69.51 | 9.47 | 233.77 | 0/1/0/4 |
+| E1 | soup (1) | ngram | clean | 5.92 | 17.04 | 8.28 | 18.42 | 0/0/0/0 |
+| E1 | soup (1) | ngram | words | 5.92 | 14.35 | 8.28 | 18.42 | 0/0/0/0 |
+| E1 | soup (1) | llm | clean | 5.92 | 13.45 | 7.69 | 15.35 | 0/0/0/0 |
+| E1 | soup (1) | llm | words | 5.92 | 13.45 | 7.69 | 14.47 | 0/0/0/0 |
+| E2 | single (5) | beam | none | 6.75 ± 1.23 | 14.98 ± 3.10 | 0.59 ± 0.00 | 2.72 ± 1.14 | 0/0/0/0 |
+| E2 | single (5) | prompt | clean | 7.57 ± 1.79 | 26.55 ± 24.81 | 0.83 ± 0.32 | 2.19 ± 0.82 | 0/1/0/0 |
+| E2 | single (5) | prompt | words | 6.27 ± 2.16 | 36.41 ± 51.17 | 29.94 ± 64.97 | 12.81 ± 22.76 | 0/2/2/1 |
+| E2 | single (5) | ngram | clean | 35.86 ± 38.88 | 40.27 ± 31.63 | 29.59 ± 39.71 | 112.11 ± 109.71 | 2/2/2/10 |
+| E2 | single (5) | ngram | words | 35.86 ± 38.88 | 39.01 ± 31.54 | 29.59 ± 39.71 | 112.02 ± 77.39 | 2/2/2/10 |
+| E2 | single (5) | llm | clean | 6.63 ± 1.53 | 26.46 ± 26.95 | 13.02 ± 27.79 | 21.84 ± 42.72 | 0/1/1/2 |
+| E2 | single (5) | llm | words | 6.27 ± 1.23 | 24.84 ± 24.81 | 0.59 ± 0.00 | 2.81 ± 0.96 | 0/1/0/0 |
+| E2 | soup (1) | beam | none | 7.10 | 8.07 | 0.59 | 1.75 | 0/0/0/0 |
+| E2 | soup (1) | prompt | clean | 6.51 | 9.42 | 0.59 | 2.19 | 0/0/0/0 |
+| E2 | soup (1) | prompt | words | 7.69 | 9.42 | 0.59 | 1.75 | 0/0/0/0 |
+| E2 | soup (1) | ngram | clean | 7.10 | 64.57 | 72.19 | 1.75 | 0/1/1/0 |
+| E2 | soup (1) | ngram | words | 7.10 | 64.13 | 72.19 | 1.75 | 0/1/1/0 |
+| E2 | soup (1) | llm | clean | 7.10 | 8.52 | 72.19 | 1.75 | 0/0/1/0 |
+| E2 | soup (1) | llm | words | 7.10 | 8.07 | 72.19 | 1.75 | 0/0/1/0 |
+
+PRIMARY: clean method - beam, s1_oov, single seeds; Holm over 3 methods per arm
+  E1 prompt: diff +35.96 [+0.45, +106.95] p=0.0350 Holm p=0.1050; s1_test diff +15.03 -> no claim
+  E1 ngram: diff +2.51 [-1.35, +6.55] p=0.1840 Holm p=0.3680; s1_test diff -0.47 -> no claim
+  E1 llm: diff +0.36 [-2.97, +3.55] p=0.8340 Holm p=0.8340; s1_test diff -0.36 -> no claim
+  E2 prompt: diff +11.57 [-3.41, +68.79] p=0.4815 Holm p=0.9630; s1_test diff +0.83 -> no claim
+  E2 ngram: diff +25.29 [-0.42, +102.91] p=0.0710 Holm p=0.2130; s1_test diff +29.11 -> no claim
+  E2 llm: diff +11.48 [-3.98, +67.31] p=0.6040 Holm p=0.9630; s1_test diff -0.12 -> no claim
+
+Secondary (no claims): method - beam
+  E1 single prompt clean s2_oov: diff +15.00 [-2.20, +68.05] p=0.1655
+  E1 single prompt words s1_oov: diff +190.31 [+41.39, +426.70] p=0.0035
+  E1 single prompt words s2_oov: diff +288.60 [+116.12, +523.91] p=0.0000
+  E1 single ngram clean s2_oov: diff +2.72 [-4.14, +9.81] p=0.4260
+  E1 single ngram words s1_oov: diff +2.15 [-1.59, +6.30] p=0.2745
+  E1 single ngram words s2_oov: diff +2.54 [-4.50, +9.78] p=0.4660
+  E1 single llm clean s2_oov: diff -0.09 [-5.94, +6.55] p=0.9940
+  E1 single llm words s1_oov: diff +0.36 [-2.65, +3.45] p=0.8120
+  E1 single llm words s2_oov: diff -0.09 [-6.30, +5.88] p=1.0000
+  E1 soup prompt clean s1_oov: diff +1.35 [-3.74, +5.96] p=0.6590
+  E1 soup prompt clean s2_oov: diff +53.95 [-3.49, +164.29] p=0.3710
+  E1 soup prompt words s1_oov: diff +54.71 [-4.82, +170.89] p=0.4950
+  E1 soup prompt words s2_oov: diff +217.54 [+52.19, +433.92] p=0.0115
+  E1 soup ngram clean s1_oov: diff +2.24 [-1.32, +6.99] p=0.3555
+  E1 soup ngram clean s2_oov: diff +2.19 [+0.00, +5.58] p=0.0925
+  E1 soup ngram words s1_oov: diff -0.45 [-1.93, +0.94] p=0.8065
+  E1 soup ngram words s2_oov: diff +2.19 [+0.00, +5.51] p=0.0830
+  E1 soup llm clean s1_oov: diff -1.35 [-3.57, +0.00] p=0.2625
+  E1 soup llm clean s2_oov: diff -0.88 [-5.38, +2.61] p=0.9145
+  E1 soup llm words s1_oov: diff -1.35 [-3.52, +0.00] p=0.2455
+  E1 soup llm words s2_oov: diff -1.75 [-5.48, +0.00] p=0.7260
+  E2 single prompt clean s2_oov: diff -0.53 [-2.23, +1.03] p=0.4810
+  E2 single prompt words s1_oov: diff +21.43 [-5.11, +100.74] p=0.5960
+  E2 single prompt words s2_oov: diff +10.09 [-2.00, +61.28] p=0.8415
+  E2 single ngram clean s2_oov: diff +109.39 [+10.04, +272.90] p=0.0225
+  E2 single ngram words s1_oov: diff +24.04 [-1.64, +99.91] p=0.1820
+  E2 single ngram words s2_oov: diff +109.30 [+10.34, +254.64] p=0.0230
+  E2 single llm clean s2_oov: diff +19.12 [-1.16, +86.47] p=0.4440
+  E2 single llm words s1_oov: diff +9.87 [-4.86, +64.07] p=0.8405
+  E2 single llm words s2_oov: diff +0.09 [-1.70, +1.86] p=0.9670
+  E2 soup prompt clean s1_oov: diff +1.35 [-3.03, +5.75] p=0.6195
+  E2 soup prompt clean s2_oov: diff +0.44 [+0.00, +1.38] p=0.7110
+  E2 soup prompt words s1_oov: diff +1.35 [-1.72, +4.63] p=0.5010
+  E2 soup prompt words s2_oov: diff +0.00 [-1.30, +1.30] p=1.0000
+  E2 soup ngram clean s1_oov: diff +56.50 [+0.00, +179.90] p=0.2520
+  E2 soup ngram clean s2_oov: diff +0.00 [+0.00, +0.00] p=1.0000
+  E2 soup ngram words s1_oov: diff +56.05 [+0.00, +179.81] p=0.2610
+  E2 soup ngram words s2_oov: diff +0.00 [+0.00, +0.00] p=1.0000
+  E2 soup llm clean s1_oov: diff +0.45 [-0.91, +2.16] p=0.7695
+  E2 soup llm clean s2_oov: diff +0.00 [-1.32, +1.30] p=1.0000
+  E2 soup llm words s1_oov: diff +0.00 [-1.30, +1.38] p=1.0000
+  E2 soup llm words s2_oov: diff +0.00 [-1.32, +1.29] p=1.0000
+
+Descriptive: full grids on OOV, single seeds, mean WER (val picked one value per run)
+  E1 s1_oov clean: ngram 0.1:23.3 0.2:27.2 0.3:99.8 0.5:201.2 (loops [0, 0, 6, 15]) | llm 0.01:20.9 0.025:20.8 0.05:21.0 0.1:20.8 0.25:23.6 0.5:28.3 1:32.6
+  E1 s1_oov words: ngram 0.1:23.0 0.2:37.7 0.3:64.8 0.5:197.4 (loops [0, 1, 3, 15]) | llm 0.01:20.9 0.025:20.8 0.05:20.7 0.1:20.7 0.25:22.0 0.5:27.3 1:31.1
+  E1 s2_oov clean: ngram 0.1:20.6 0.2:25.4 0.3:86.8 0.5:327.5 (loops [0, 0, 5, 27]) | llm 0.01:17.7 0.025:18.0 0.05:18.2 0.1:18.0 0.25:22.1 0.5:25.3 1:28.4
+  E1 s2_oov words: ngram 0.1:20.4 0.2:24.5 0.3:73.6 0.5:335.8 (loops [0, 0, 4, 28]) | llm 0.01:17.7 0.025:17.8 0.05:18.0 0.1:18.1 0.25:20.0 0.5:23.1 1:26.0
+  E2 s1_oov clean: ngram 0.1:28.0 0.2:51.8 0.3:99.8 0.5:131.1 (loops [1, 3, 7, 9]) | llm 0.01:14.8 0.025:14.4 0.05:23.5 0.1:34.8 0.25:35.6 0.5:37.6 1:41.3
+  E2 s1_oov words: ngram 0.1:27.3 0.2:51.1 0.3:64.4 0.5:115.5 (loops [1, 3, 4, 8]) | llm 0.01:14.8 0.025:14.2 0.05:14.5 0.1:34.0 0.25:33.5 0.5:34.8 1:38.3
+  E2 s2_oov clean: ngram 0.1:89.9 0.2:178.0 0.3:190.4 0.5:428.2 (loops [8, 16, 17, 38]) | llm 0.01:2.7 0.025:2.7 0.05:23.9 0.1:52.2 0.25:52.1 0.5:52.7 1:56.8
+  E2 s2_oov words: ngram 0.1:100.8 0.2:177.5 0.3:134.8 0.5:313.7 (loops [9, 16, 12, 28]) | llm 0.01:2.7 0.025:2.7 0.05:23.9 0.1:52.2 0.25:52.0 0.5:51.6 1:53.6

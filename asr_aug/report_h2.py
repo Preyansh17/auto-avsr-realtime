@@ -33,7 +33,7 @@ def run(kind):
     for a in ("N", "NF", "NS", "ON", "ONF", "ONS"):
         v = [wer(D[a, s]) for s in S]; print(f"{a} oov(fold-scored) {st.mean(v):.1f}±{st.stdev(v):.1f}")
     # bootstrap over unique sentences, grouping rows by sentence so arms with different row sets stay paired
-    sents = sorted({x[0] for a in D for x in D[a, 1]})
+    sents = sorted({x[0] for k in D for x in D[k]})
     def agg(a, s, ss):
         idx = {}
         for ref, e, n in D[a, s]: idx.setdefault(ref, []).append((e, n))
