@@ -205,3 +205,9 @@ Large-v3 encoder-only, seeds 1-5. E1 = old split_v1 + s1_train. E2 = E1 + s2_tra
   - LLM rescoring is near-neutral at mu <= 0.025. Higher mu picks looped 10-best candidates (E2 s2_oov 2.7 at mu 0.025, 52 at mu 0.1). The mean token log-prob rewards repetition.
 - Amendment 1 (finer mu grid) changed LLM from clearly harmful to neutral; it did not make it help.
 - Possible follow-up (not pre-registered): loop guards (no-repeat n-gram, EOS-aware fusion, a length or repetition penalty on the LLM score). The gain available is small: E2 soup beam is already 8.07 on s1_oov.
+
+### H2 results (2026-10-28; 20/20 jobs done, `asr_aug/report_h2.py`, seeds 1-5, oov rows of the held-out fold only)
+Val-selected ckpt oov WER %: N 31.0, NF 25.1, NS 26.5, ON 27.4, ONF 26.4, ONS 21.4.
+Primary (Holm over 2): NF-N -5.9pp [-12.7,+0.9] Holm p=0.17; ONF-ON -1.1pp [-7.0,+5.2] Holm p=0.72. Neither "helps" (CI upper not < 0).
+Secondary: NF-NS -1.4 (ns); ONF-ONS +4.9 [-0.6,+11.1] (targeted text not better than generic; trends worse). Last ckpt: NF-N -0.2, ONF-ON +0.5, ONF-ONS +4.8.
+Verdict: oov-sentence text from the other fold does not help beyond noise; generic synthetic (ONS) is the best arm.
