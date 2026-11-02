@@ -65,7 +65,11 @@ def parse_args():
     p.add_argument("--gpus", type=int, default=1)
     p.add_argument("--grad-accum", type=int, default=1)
     p.add_argument("--resume-ckpt", default=None,
-                   help="PTL .ckpt path to resume optimizer/scheduler/epoch state from")
+                   help="PTL .ckpt path to resume optimizer/scheduler/epoch state from; 'auto' = the newest complete "
+                        ".ckpt under --output-dir if there is one, else start fresh (preemptible, requeued jobs)")
+    p.add_argument("--freeze-bn-stats", action="store_true",
+                   help="keep encoder BatchNorm layers in eval mode during training (running "
+                        "mean/var stay at the pretrained values; affine weights still train)")
     p.add_argument("--speed-perturb", action="store_true",
                    help="enable Lhotse's train_ds.perturb_speed (random speed "
                         "perturbation augmentation), off by default")
@@ -122,6 +126,12 @@ def parse_args():
     # Cache-aware streaming context (left,right) in frames; keep model default if unset.
     p.add_argument("--att-context-size", type=int, nargs=2, default=None,
                    help="e.g. 70 13 ; default keeps the pretrained streaming context")
+    # Unified (chunked_limited_with_rc) models: the checkpoint's att_chunk_context_size / streaming_loss_weight are
+    # never read by NeMo's training code, so a plain fine-tune trains full-context only and streaming decodes degrade.
+    p.add_argument("--unified-stream-prob", type=float, default=0.0,
+                   help="unified models only: per training batch, with this probability use a streaming attention "
+                        "mask [left, chunk, right] sampled uniformly from the model's att_chunk_context_size lists "
+                        "(frames of 80 ms), else full context; validation is always full context")
     # SpecAugment (NeMo native). Green-leaning: heavy time, light freq.
     p.add_argument("--no-specaug", action="store_true")
     p.add_argument("--freq-masks", type=int, default=1)
@@ -152,6 +162,51 @@ def make_lr_log_callback(warmup_steps):
                 print(f"[lr] optimizer step {s}: lr={','.join(lrs)}", flush=True)
 
     return LRLog()
+
+
+def make_rng_state_callback():
+    """Put the global python/numpy/torch/cuda RNG states into Lightning's .ckpt and restore them on resume.
+
+    Lightning's .ckpt carries model, optimizer, scheduler and loop state but not the global RNGs, and those drive
+    the dataloader worker seeds (drawn from torch's RNG each time an epoch's iterator is created; with
+    seed_everything(workers=True) the workers' speed-perturb and shuffle draws follow from them) and SpecAugment.
+    The checkpoint is written at an epoch end, so restoring these states makes the resumed epoch draw what the
+    uninterrupted run would have drawn.
+    """
+    import random
+
+    import numpy as np
+    import torch
+    from lightning.pytorch import Callback
+
+    class RNGState(Callback):
+        def state_dict(self):
+            return {"python": random.getstate(), "numpy": np.random.get_state(), "torch": torch.get_rng_state(),
+                    "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else []}
+
+        def load_state_dict(self, sd):
+            random.setstate(sd["python"])
+            np.random.set_state(sd["numpy"])
+            torch.set_rng_state(sd["torch"])
+            if sd["cuda"]:
+                torch.cuda.set_rng_state_all(sd["cuda"])
+            print("[resume] restored python/numpy/torch/cuda RNG states")
+
+    return RNGState()
+
+
+def find_resume_ckpt(output_dir):
+    """Newest complete Lightning .ckpt under output_dir, or None. A .ckpt is a zip whose central directory is
+    written last, so one truncated by preemption mid-write fails is_zipfile and is skipped."""
+    import glob
+    import zipfile
+
+    for c in sorted(glob.glob(os.path.join(output_dir, "lightning_logs", "*", "checkpoints", "*.ckpt")),
+                    key=os.path.getmtime, reverse=True):
+        if zipfile.is_zipfile(c):
+            return c
+        print(f"[resume] skipping incomplete {c}")
+    return None
 
 
 def make_save_best_wer_callback(out_path):
@@ -204,9 +259,13 @@ def make_save_best_wer_callback(out_path):
             if wer is None:
                 return
             wer = float(wer)
+            print(f"[val] epoch={trainer.current_epoch} val_wer={wer:.4f}")
             if wer < self.best_wer:
                 self.best_wer = wer
-                pl_module.save_to(self.out_path)
+                # write-then-rename: a job preempted mid-save must not leave a truncated best .nemo behind
+                tmp = self.out_path[: -len(".nemo")] + ".tmp.nemo"
+                pl_module.save_to(tmp)
+                os.replace(tmp, self.out_path)
                 print(f"[best] epoch={trainer.current_epoch} val_wer={wer:.4f} -> saved {self.out_path}")
 
     return SaveBestWER()
@@ -394,6 +453,14 @@ def main():
         model.cfg.validation_ds.num_workers = args.num_workers
         model.cfg.validation_ds.shuffle = False
         model.cfg.validation_ds.use_bucketing = False
+        # Prompt-conditioned models (EncDecRNNTBPEModelWithPrompt, e.g. nemotron-labs-unified-asr) build a
+        # prompt-index dataset that reads prompt_dictionary/num_prompts from the dataset config, but the
+        # released checkpoint keeps them only in model_defaults ("prompt_dictionary is required in config").
+        md = model.cfg.get("model_defaults") or {}
+        if md.get("prompt_dictionary"):
+            for ds in (model.cfg.train_ds, model.cfg.validation_ds):
+                ds.prompt_dictionary = md.prompt_dictionary
+                ds.num_prompts = md.get("num_prompts", model.cfg.get("num_prompts", 128))
         for key in _bucketing_keys:
             model.cfg.train_ds.pop(key, None)
             model.cfg.validation_ds.pop(key, None)
@@ -496,7 +563,48 @@ def main():
               f"(~{args.epochs // args.val_every_n_epochs} checkpoint-selection "
               f"points over {args.epochs} epochs)")
 
-    callbacks = [best_wer_cb, make_lr_log_callback(args.warmup_steps)]
+    callbacks = [best_wer_cb, make_lr_log_callback(args.warmup_steps), make_rng_state_callback()]
+    if args.freeze_bn_stats:
+        # With batch 2 of padded dysarthric clips the conv-module BatchNorm running stats drift 70-150%
+        # within one epoch while the weights barely move (median rel change 1e-4); on
+        # nemotron-labs-unified-asr that alone took s2_test from 33.7 to 71.0 WER. Lightning puts the
+        # model back in train mode after every validation, so re-freeze at each batch start.
+        import torch.nn as nn
+        from lightning.pytorch import Callback
+
+        class FreezeBNStats(Callback):
+            def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
+                for m in pl_module.modules():
+                    if isinstance(m, nn.modules.batchnorm._BatchNorm):
+                        m.eval()
+
+        callbacks.append(FreezeBNStats())
+        print("BatchNorm running stats frozen (eval mode) during training")
+    if args.unified_stream_prob > 0:
+        # Mirrors the checkpoint's own (unused) recipe: offline_loss_weight = streaming_loss_weight = 0.5 becomes, in
+        # expectation, a 50/50 per-batch choice. The mask is the one the buffered streaming decoder sets via
+        # set_default_att_context_size([left, chunk, right]); the python RNG is restored on resume (RNGState).
+        import random
+        from lightning.pytorch import Callback
+
+        enc = model.encoder
+        assert enc.att_context_style == "chunked_limited_with_rc", "--unified-stream-prob needs a unified model"
+        lefts, chunks, rights = [list(x) for x in model.cfg.encoder.att_chunk_context_size]
+        full = list(enc.att_context_size)
+
+        class UnifiedStreamTrain(Callback):
+            def on_train_batch_start(self, trainer, pl_module, batch, batch_idx):
+                enc.att_context_size = ([random.choice(lefts), random.choice(chunks), random.choice(rights)]
+                                        if random.random() < args.unified_stream_prob else full)
+
+            def on_validation_start(self, trainer, pl_module):
+                enc.att_context_size = full
+
+            on_train_end = on_validation_start
+
+        callbacks.append(UnifiedStreamTrain())
+        print(f"Unified streaming training: p={args.unified_stream_prob} left={lefts} chunk={chunks} right={rights}, "
+              f"else {full}")
     if args.ckpt_every_n_epochs > 1:
         # Replace Lightning's implicit every-validation-epoch ModelCheckpoint
         # with an explicit, less frequent one. Passing any ModelCheckpoint in
@@ -529,7 +637,10 @@ def main():
         callbacks=callbacks,
     )
     model.set_trainer(trainer)
-    trainer.fit(model, ckpt_path=args.resume_ckpt)
+    ckpt = find_resume_ckpt(args.output_dir) if args.resume_ckpt == "auto" else args.resume_ckpt
+    if args.resume_ckpt == "auto":
+        print(f"[resume] {'from ' + ckpt if ckpt else 'no complete .ckpt yet, starting fresh'}")
+    trainer.fit(model, ckpt_path=ckpt)
 
     out = os.path.join(args.output_dir, "nemotron_patient.nemo")
     model.save_to(out)

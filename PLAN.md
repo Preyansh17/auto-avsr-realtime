@@ -146,6 +146,213 @@ This drops my earlier T3 (find the patient set: same split), T4 (semg3 audio bas
 
 ### 3.3 What is left that Tianyu has not done (ordered)
 Each one is grounded in a gap the page states or a result it shows.
+0. **Benchmark nvidia/nemotron-labs-unified-asr-0.6b (user request 2026-10-28; run first, ~2 GPU-h).** Released on
+   HF 2026-10-27: Unified FastConformer-RNNT, 600M, 25 languages incl. English, one checkpoint for offline and buffered
+   streaming (latency = chunk + right context, 2.08 s down to 0.16 s), language-ID prompt (`target_lang="en"`),
+   punctuation and capitals. NVIDIA ships inference only so far; the card names NeMo Speech 3.1.0.
+   - Step 1, zero-shot: offline, and streaming at 1.12 s (5.6/0.56/0.56) and 0.56 s (5.6/0.16/0.40), on s1/s2
+     val/test/oov (shared role rows, `score_shared.py` normaliser). References: zero-shot large-v3 (s1_test ~85%) and
+     zero-shot nemotron-speech-streaming-en-0.6b (our current Nemotron base), same rows.
+   - Step 2, only if step 1 runs: try fine-tuning on s1+s2 train with our Nemotron recipe. This needs a NeMo training
+     path for the unified model, which the card does not provide.
+   - Also note: NeMo Speech 3.0 adds GPU phrase boosting for RNNT/TDT, a biasing method we have not tried (item 1).
+   - Env: new `/scratch/pa2753/envs/nemo3` (built on a CPU node); `nemo_asr` (NeMo 2.7.3) is left untouched.
+   - 2026-10-28: release 3.0.0 cannot pass the language prompt to its dataloader ("Unknown prompt key: 'None'"), so the
+     benchmark runs on NeMo main = 3.1.0 (`envs/nemo31`, user-approved) on a uv-managed Python (the system 3.12 lacks
+     Python.h, which Triton needs). Added `s2ov_test`, Tianyu's semg2 test-open, for a direct zero-shot comparison.
+   - **Step 1 result (2026-10-28, zero-shot, jobs 21290573/21290574, NeMo 3.1.0+040574f, `target_lang=en`;
+     hyps in `/scratch/pa2753/unified/out/`).** WER %:
+     | model / mode | s1_test | s1_oov | s2_test | s2_oov | s2ov_test |
+     |---|---|---|---|---|---|
+     | unified, offline | 97.6 | 100.0 | 33.7 | 45.6 | 68.4 |
+     | unified, streaming 1.12 s | 96.5 | 98.7 | 36.1 | 45.2 | 75.1 |
+     | unified, streaming 0.56 s | 98.8 | 99.1 | 56.2 | 55.7 | 81.0 |
+     | nemotron-speech-streaming-en, offline | 97.6 | 100.0 | 42.0 | 45.2 | 73.8 |
+     | Tianyu, untrained (s2ov_test only) | | | | | L3 49.6, Parakeet 52.4, Nemotron 70.3 |
+     - semg1: both NeMo models output nothing for most clips (unified: 27/30 s1_test and 49/49 s1_oov empty). The audio
+       is fine (16 kHz mono, similar level to s2), so this is the RNNT models emitting blanks on severe dysarthria.
+     - semg2: unified beats the old Nemotron offline on s2_test (33.7 vs 42.0) and s2ov_test (68.4 vs 73.8). It is
+       still far from usable zero-shot, and worse than Tianyu's untrained Whisper L3 on s2ov (49.6).
+     - Our old-Nemotron s2ov_test 73.8 vs Tianyu's untrained Nemotron 70.3: close; the gap fits a different normaliser.
+     - Verdict: zero-shot it is not a better base for semg1. Step 2 (fine-tune) is the only way it could matter; the
+       card gives no training recipe.
+   - **Step 2 design (pre-registered 2026-10-28, before any fine-tune result).** NeMo 3.1 does have a training path
+     (`EncDecRNNTBPEModelWithPrompt` + Lhotse prompt-index dataset, `lang_field: source_lang`), so we fine-tune with
+     `asr_baselines/nemotron_finetune.py` unchanged. Code: `asr_aug/unified/{make_ft_manifests.py,ft.sbatch}`.
+     - Arms: U = unified, N = old `nemotron-speech-streaming-en-0.6b`. Both trained in the nemo31 env, so only the base differs.
+     - Data: the E2 real data (old_legacy + old_legal 314, s1_train 240, s2_train 240 = 794 clips; `source_lang=en`).
+       Val = s1_val + s2_val (60), used for best-WER checkpoint selection only.
+     - Recipe, same for both: full fine-tune, batch 2 x accum 2, warmup_flat lr 1e-5 (200 warmup steps), 60 epochs,
+       speed perturb, SpecAugment defaults, seeds 1-3.
+     - Eval: offline on s1/s2 test, oov, and s2ov_test. U also gets streaming at 1.12 s as a secondary.
+     - Primary read: the seed mean of U vs N on s1_test, s1_oov, s2_test, s2_oov. "U better" needs all 3 U seeds below the
+       N seed mean on a set, with the mean gap over 2 pp. Otherwise call it a tie. Context bars: the Whisper E2 soup and
+       Tianyu's numbers (3.1). We do not expect an RNNT base to beat the Whisper encoder-only recipe on semg1.
+     - **Amendment 1 (2026-10-28, after 1-epoch smoke runs on 80 clips only, before any full run):** add
+       `--freeze-bn-stats` to both arms. The smoke run without it wrecked unified (s2_test 33.7 -> 71.0, many empty hyps)
+       while barely moving the weights (median rel change 1e-4); conv-module BatchNorm running stats had drifted 70-150%
+       at batch 2. With frozen BN stats the same smoke run gives s2_test 20.7 (unified) and 36.7 (old Nemotron).
+       Env fixes found by the smoke runs: nemo31 needs `numba-cuda` 0.30.4, numpy pinned to 2.3.5 (numba-cuda uses
+       `np.row_stack`), and the env's own nvJitLink 13.4 preloaded (the system 13.3 one is "outdated" for NVVM 13.4).
+       The step 1 zero-shot numbers were made before the numpy pin; not re-run.
+     - **Amendment 2 (2026-10-29, no full-run result read):** HPC auto-cancelled unified seed 1 after 2 h for 46.5%
+       mean GPU utilisation (cancel threshold 50%); it was at epoch 36, no eval had run. Both arms rerun as batch 4 x
+       accum 1 (same effective batch 4 and optimizer-step count; BN stats are frozen, so the per-step batch only
+       changes gradient noise), 8 CPUs and 8 loader workers. All six runs restarted from scratch.
+     - **Amendment 3 (2026-10-29, no full-run result read):** batch 4 still sampled at 42% mean GPU (36 samples over
+       3 min, L40S, epoch 6), and the six single-seed jobs queued behind the per-user GPU cap. Recipe unchanged; the
+       three seeds of each base now train side by side on one GPU (`ft.sbatch SEEDS="1 2 3"`, 16 CPUs split across
+       seeds, starts staggered 90 s). Jobs 21322988 (unified) and 21322989 (nemotron_en); the earlier six were cancelled
+       and their run dirs deleted.
+     - **Preemptible GPUs (2026-10-29, infrastructure only, no recipe change):** HPC docs: `--comment="preemption=yes;
+       [preemption_partitions_only=yes;]requeue=true"`, no `-p`; preemptible after 30 min, requeued in place. B200 only
+       works from the nemo31 env (sm_100); whisper_asr (torch 2.5.1) has no B200 kernels, so Whisper jobs add
+       `--constraint="l40s|a100|h100|h200"`. Both trainers now resume a requeued run: Whisper `--resume` (newest
+       complete HF checkpoint; torch.load guard lifted for own checkpoints) and Nemotron `--resume-ckpt auto` (rolling
+       .ckpt every 2 epochs + an RNGState callback; atomic best .nemo); launchers append logs and skip training after
+       `train_done`. Kill-and-resume test (`asr_aug/unified/test_resume.sbatch`, jobs 21376761 / 21382997, A100): the
+       resumed run is as close to an uninterrupted one as two uninterrupted runs are to each other (Whisper best
+       weights max |diff| 1.73e-4 vs 1.78e-4; Nemotron final 1.34e-3 vs 1.40e-3). Bit-exact resume is not possible
+       (two uninterrupted runs already differ), so a preempted seed is an equivalent, not identical, continuation.
+   - **Step 2 result (2026-10-29, jobs 21322988 / 21322989, offline, val-selected best .nemo, seeds 1-3).** WER %,
+     seed mean (seeds):
+
+     | set | U = unified | N = old nemotron_en | rule (all U < N mean, gap > 2 pp) |
+     |---|---|---|---|
+     | s1_test | **6.31** (6.51, 5.92, 6.51) | 9.86 (8.88, 10.65, 10.06) | **U better** (gap 3.55) |
+     | s1_oov | 27.21 (26.91, 28.25, 26.46) | 28.85 (26.91, 30.04, 29.60) | tie (gap 1.64) |
+     | s2_test | 0.59 (0.59 x3) | 0.79 (1.18, 0.59, 0.59) | tie (gap 0.20) |
+     | s2_oov | **4.68** (3.95, 5.70, 4.39) | 7.31 (7.89, 5.26, 8.77) | **U better** (gap 2.63) |
+     | s2ov_test (secondary) | 43.32 (43.88, 42.19, 43.88) | 43.74 (43.04, 41.77, 46.41) | tie |
+
+     - Unified is the better RNNT base: it wins s1_test and s2_oov and ties the rest. Fine-tuning takes it from 97.6 to
+       6.3 on s1_test (zero-shot, step 1).
+     - Against Whisper (context only, not like-for-like: Whisper E2 also trains on 397 Higgs clips). Unified single seeds
+       beat Whisper E2 single seeds on s1_test (6.31 vs 7.57), but are far behind on s1_oov (27.2 vs 15.2; E2 soup 8.07).
+       Unseen semg1 words remain the RNNT weakness. On semg2 the two are close (s2_oov 4.68 vs 2.63; E2 soup 1.75).
+     - s2ov_test 43 vs 68 zero-shot. Tianyu's 1.6 trains on s2ov_train, so it is not comparable.
+     - Unified streaming at 1.12 s (secondary; crashed in-job because ft.sbatch did not pass the NeMo 3.1 checkout,
+       fixed and rerun as job 21388126 on B200). Seed means vs offline: s1_test 8.88 vs 6.31, s1_oov 27.80 vs 27.21,
+       s2_test 0.59 vs 0.59, s2_oov 5.85 vs 4.68, s2ov_test 43.88 vs 43.32. Streaming costs about 2.6 pp on semg1 test
+       and 1.2 pp on semg2 oov, and is about even elsewhere. NeMo fell back from full CUDA graphs on B200 (warning
+       only), which does not change the decoding result.
+   - **Step 3 = v2, semg2 phone target (pre-registered 2026-10-29, user-approved, before any v2 result).** Bar is
+     Tianyu's semg2 package `semg2_best_v1_20261029` (extracted without weights to `/scratch/pa2753/tianyu_semg2_best_v1`;
+     his `tools/score.py --verify` = ALL MATCH). Phone bars, WER %: test-open38 8.13 (his Nemotron-en 3-seed soup, 80 ms)
+     / 5.69 (1.04 s); conv34 5.88 (current App model, 80 ms); offline context: his Whisper 2.03 / 2.71.
+     - Blocker: all three of his Higgs pools (5,378 clips under `runs/semg_oct1_likeness2/pool_v{3,5}`) are unreadable to
+       us. So v2 starts real-only (v2r); a Higgs arm needs either his read access or our own semg2 Higgs pool (user's call).
+     - Data v2r: s2ov_train + s2_train (189 + 240 = 429), val s2ov_val + s2_val (55); role files checked identical to his
+       package CSVs. Recipe = step 2 unchanged (frozen BN, warmup_flat 1e-5, 60 epochs, batch 4, seeds 1-3, packed).
+       Arms U2r (unified) and N2r (nemotron_en), jobs 21379643 / 21379644. Zero-shot rows on his sets: job 21379642.
+     - Eval: `tianyu_eval.py` / `teval.sh`, his CSVs and scorer, sets val25, val30, test30, oov50, test-open38, conv34.
+       U: offline + buffered streaming at 1.12 / 0.56 / 0.16 s latency (C0.56R0.56, C0.16R0.40, C0.08R0.08).
+       N: offline + cache-aware 80 ms (70,1) and 1.04 s (70,13), his phone modes. NeMo 3.1 scripts, not his tracer, so
+       streaming rows are close to but not identical with his pipeline; N2r at 80 ms is the in-pipeline reference.
+     - Primary read: U2r vs N2r seed mean on test-open38 and conv34, U at 0.16 s vs N at 80 ms (and offline vs offline).
+       Same "all 3 seeds below the other arm's mean, mean gap > 2 pp" rule as step 2. Beating Tianyu's bar is secondary
+       and descriptive (his arm has Higgs data and a 3-seed soup, ours not yet); 1 word = 0.4 pp on test-open.
+     - **Amendment 1 (2026-10-29, no v2 result read):** Tianyu granted read access to his Higgs pools; user asked to try his
+       clips and ours. Arms, all on B200 (preemptible, resume verified by job 21376761), 3 seeds packed per job:
+       U2r / N2r (real 429, 60 epochs; replace the L40S jobs 21379643/44) = 21383152 / 21383153;
+       U2h / N2h (real + his 5,378 Higgs rows from the package train.csv, 11 epochs = his epoch count, ~16k steps) =
+       21383154 / 21383156; U2o (real + our 1,751 kept semg2 Higgs clips from the stack study, 30 epochs, ~16k steps;
+       text checked free of every eval sentence) = 21383157. No N2o: only unified is the candidate.
+       2026-10-30: B200 queue estimated start Oct 31 16:33, so all five were cancelled before starting and resubmitted
+       (same recipes, preemptible) by `--test-only` start estimate: U2r 21410746 / N2r 21410747 on H100; U2h 21410748 /
+       N2h 21410749 / U2o 21410750 on L40S. Each compared pair shares a GPU type; e2 baselines also ran on L40S.
+       2026-10-30 13:30: preemptible partitions preempt every ~30 min. A v2h epoch (4,356 steps) took 22 min (N2h) to
+       ~37 min (U2h) with 3 seeds packed on L40S, so with CKPT_EVERY=2 neither ever wrote a resume .ckpt and every
+       requeue restarted from scratch (8 restarts). Cancelled; dirs kept as *_v2h_seed*_preempted_20261030. Resubmitted
+       one seed per job on H100 with CKPT_EVERY=1: U2h 21437279/21437281/21437284, N2h 21437280/21437283/21437285
+       (seeds 1/2/3). U2h vs U2r is now same-GPU (H100); U2h vs U2o is H100 vs L40S (descriptive read anyway).
+       N2r done (H100, 3 seeds): offline / 1.04 s look-ahead WER test30 0.59, oov50 1.46, test_open38 7.73,
+       conv34 5.73; 80 ms look-ahead 1.18 / 1.61 / 9.76 / 11.46 (Tianyu phone 80 ms: 1.78 / 1.32 / 8.13 / 9.05).
+       2026-11-01 results (3-seed means, WER test30 / oov50 / test_open38 / conv34; U2o seed 1 only, seeds 2-3 running):
+         offline:  N2r 0.59/1.46/7.73/5.73  N2h 0.59/1.61/6.77/7.54  U2r 0.59/2.19/7.86/7.39  U2h 0.59/0.44/6.23/3.62
+                   U2o(s1) 0.59/0.44/9.35/6.33
+         ~80 ms:   N2r cache70_1 1.18/1.61/9.76/11.46  N2h 0.99/2.34/9.49/12.97 (conv sd 5.0)
+                   U2r C0.08/R0.08 3.55/6.43/34.4/32.3  U2h 14.6/18.1/57.1/76.5  U2o(s1) 10.7/13.6/39.8/52.9
+         ~1 s:     N2r/N2h cache70_13 = offline (70,13 is the model default)  U2r C0.56/R0.56 0.79/2.92/14.8/9.80
+                   U2h 0.79/0.88/14.1/9.50
+       Reads: (1) best offline = U2h (his synthetic helps unified offline: conv 7.39 -> 3.62, oov 2.19 -> 0.44), still
+       behind Tianyu offline Whisper on test-open (6.23 vs 2.03). (2) unified does not stream well after our fine-tune:
+       at ~1 s it is worse than old Nemotron at 1.04 s, and at 80 ms it collapses, worse with synthetic data. Our
+       fine-tune trains at the full default context only (no --att-context-size / chunk randomisation), so low-latency
+       modes are never trained. (3) best 80 ms system = N2r (old Nemotron real-only), within ~1.6-2.4 pts of Tianyu.
+       Next candidate: streaming-aware fine-tune (multi-lookahead att_context sampling for nemotron_en; chunked
+       training for unified).
+     - **Step 4 (v3) pre-registration (2026-11-01, user: "Yes, plan it"; no v3 result read).** Diagnosis:
+       (a) nemotron_en is already trained multi-lookahead: the checkpoint's att_context_size lists [70,13],[70,6],
+       [70,1],[70,0] and the encoder samples one per training batch (uniform), exactly Tianyu's
+       --nemo-att-context-probs 0.25x4. Its 80 ms gap to him is not a missing streaming objective.
+       (b) unified is NOT: its att_chunk_context_size ([70] / [1,2,7,13] / [0,1,2,3,4,7,13]) and
+       streaming_loss_weight 0.5 are stored in the config but never read by NeMo's training code (checkout 040574f),
+       so every unified fine-tune so far trained full-context only. Explains its streaming collapse, worse with
+       more steps (v2h).
+       (c) Tianyu's phone model is a uniform weight soup of 3 seeds (7/1/42) of his recipe (package
+       recipe/soup_info.json), not a single run; his seeds also use batch 2 x accum 2, cosine lr, wd 1e-3, his three
+       Higgs pools at 50% sampling ratio.
+       Arms:
+       S (no training): uniform 3-seed soups (asr_aug/unified/soup.py) of N2r, N2h, U2r, U2h (U2o when done), scored
+         with teval.sh. Read: soup vs its 3-seed mean, per mode.
+       U3r / U3h: unified, recipe v2r (60 ep) / v2h (11 ep), --unified-stream-prob 0.5 (per batch: 50% full context,
+         50% [70, chunk, right] uniform over the checkpoint's own lists), 3 seeds, one seed per H100 job, then soup.
+         Everything else as U2r / U2h. Checkpoint selection stays on full-context val WER.
+       teval.sh adds unified C0.08 R0 (80 ms, matching Tianyu's 80 ms look-ahead) to its modes.
+       Reads (pre-registered): primary = U3 vs U2 (same recipe) at C0.08/R0, C0.08/R0.08, C0.56/R0.56 on
+       test_open38 and conv34, 3-seed means; offline must not degrade by more than 1 WER pt on either. Unified
+       becomes the low-latency candidate only if U3 (or its soup) beats N2r / N2r-soup at matched latency
+       (unified C0.08/R0 vs nemotron_en cache70_1). Single seeds are not read (seed sd up to 5 pts at 80 ms).
+       Jobs: smoke 21607107 (L40S); soups 21607108 (A100); U3r seeds 1/2/3 = 21607111/21607114/21607120,
+       U3h = 21607113/21607118/21607123 (H100, afterok on the smoke).
+       Update 2026-11-01 20:10: smoke training passed (log prints the streaming-training line; [best] saved) and its
+       teval decoded every mode incl. C0.08/R0 before a preemption, so the smoke was cancelled and the U3 jobs were
+       resubmitted without the dependency and on "a100|l40s|h100" (H100 estimate was Nov 2-3): U3r 21611021/21611023/
+       21611026, U3h 21611022/21611025/21611027. Fix: a requeued soup job skipped teval when any scores.json existed,
+       leaving modes missing; tianyu_eval.py now skips per mode instead, and soup2 21611000 (SEEDS_TOO=1) fills
+       C0.08/R0 for the U2r/U2h soups and their seeds.
+       Arm S results (soup, WER %; test30 / oov50 / test_open38 / conv34; 3-seed mean in brackets for test_open38 / conv34):
+         N2r offline 0.59 / 1.75 / 8.13 / 4.98 [7.73 / 5.73]; cache70_1 0.59 / 2.63 / 8.94 / 9.50 [9.76 / 11.46].
+         N2h offline 0.59 / 0.88 / 5.69 / 6.33 [6.77 / 7.54]; cache70_1 0.59 / 2.19 / 10.16 / 9.95 [9.49 / 12.97].
+         U2r offline 0.59 / 1.75 / 7.32 / 6.79 [7.86 / 7.39]; C0.56/R0.56 1.18 / 2.63 / 14.63 / 10.41 [14.8 / 9.80];
+           C0.08/R0.08 3.55 / 4.82 / 30.49 / 31.67 [34.4 / 32.3].
+         U2h offline 0.59 / 0.44 / 5.28 / 2.71 [6.23 / 3.62]; C0.56/R0.56 0.59 / 0.88 / 12.60 / 9.95 [14.1 / 9.50];
+           C0.08/R0.08 19.53 / 14.91 / 56.10 / 71.49 [57.1 / 76.5].
+         C0.08/R0 (80 ms, soup2 21611000): U2r soup 4.73 / 9.21 / 36.59 / 33.48 [36.45 / 34.84];
+           U2h soup 5.33 / 12.28 / 46.34 / 71.95 [47.29 / 68.18]. These 3-seed means are the U2 side of the U3 read.
+       Read: the soup helps offline and at 80 ms cache-aware on conv34 (N2r 9.50 vs 11.46; N2h 9.95 vs 12.97), mixed on
+       test_open38. Descriptive vs Tianyu's 80 ms phone bar (8.13 / 9.05): N2r soup cache70_1 is behind on test_open38 by
+       0.81 (about 2 words) and on conv34 by 0.45. U2h soup offline (5.28 / 2.71) beats his phone 1.04 s (5.69 / 8.14)
+       and ties his offline Whisper on conv34 (2.71). Unified at 80-160 ms remains far off until U3 (U2r C0.08/R0 conv34 34.8 vs N2r cache70_1 11.5), and the
+       soup does not rescue it there. U3 started 2026-11-01 ~22:15 (U3r seeds 1/2, U3h seed 1 running; rest queued).
+       **U3 result (2026-11-02, all 6 seeds done; 3-seed means, test_open38 / conv34, U2 mean in brackets):**
+         U3r offline 6.37 / 5.13 [7.86 / 7.39]; C0.56/R0.56 13.68 / 11.61 [14.8 / 9.80];
+           C0.08/R0.08 25.88 / 25.19 [34.4 / 32.3]; C0.08/R0 27.24 / 22.77 [36.45 / 34.84]; C0.16/R0.4 17.21 / 11.91.
+         U3h offline 6.10 / 3.77 [6.23 / 3.62]; C0.56/R0.56 11.79 / 8.90 [14.1 / 9.50];
+           C0.08/R0.08 65.85 / 71.95 [57.1 / 76.5]; C0.08/R0 45.12 / 50.98 [47.29 / 68.18] (seed sd 10-21 at 80-160 ms;
+           seed 3 collapses: 56.9 / 69.2 at C0.08/R0).
+       Reads (pre-registered): streaming training helps U3r at 80-160 ms (-8.5 to -12.1 pts, every gap over 2 pp, seed sd
+       under 3) and offline does not degrade (it improves: 6.37 / 5.13). At 1.12 s it is a tie (-1.1 / +1.8). U3h is
+       unstable at 80-160 ms (gaps run both ways, sd up to 21), tie offline. Gate: unified does NOT become the
+       low-latency candidate: U3r C0.08/R0 27.24 / 22.77 vs N2r cache70_1 9.76 / 11.46 (soup 8.94 / 9.50), about 2x
+       worse at matched 80 ms. Soup of the U3 arms (soup3 21652499) pending, per the pre-registration ("U3 or its
+       soup"); a soup is unlikely to close a 2x gap. Low-latency candidate stays nemotron_en (N2r soup).
+       soup3 21652499 (U3 soups, test_open38 / conv34): U3r soup offline 6.50 / 5.88; C0.56/R0.56 14.23 / 10.41;
+         C0.08/R0.08 24.80 / 23.53; C0.08/R0 27.64 / 19.91. U3h soup offline **4.07 / 2.71**; C0.56/R0.56 10.16 / 9.50;
+         C0.16/R0.4 15.45 / 11.76; C0.08/R0.08 64.23 / 72.85; C0.08/R0 39.02 / 48.42. Gate unchanged (U3r soup 80 ms
+         27.64 / 19.91 vs N2r soup 8.94 / 9.50). U3h soup offline is our best offline model (Tianyu offline Whisper
+         2.03 / 2.71: behind on test_open38, tie on conv34).
+       U2o done 2026-11-02 (3-seed means, test_open38 / conv34): offline 8.13 / 6.18; C0.56/R0.56 10.98 / 8.14;
+         C0.16/R0.4 14.90 / 13.88; C0.08/R0.08 40.65 / 48.87. Synthetic effect, our pool (U2o vs U2r): ties offline
+         (+0.27 / -1.21), better at C0.56/R0.56 on test_open38 (-3.8), tie on conv34 (-1.66). His vs our pool (U2h vs U2o,
+         descriptive): his better offline (6.23 / 3.62 vs 8.13 / 6.18). U2o soup: soup4.
+       Best per latency vs Tianyu (descriptive, one soup each): 80 ms N2r soup cache70_1 8.94 / 9.50 vs his 8.13 / 9.05
+         (behind 0.81 / 0.45); 1.04 s N2h soup cache70_13 5.69 / 6.33 vs his 5.69 / 8.14 (tie / ahead);
+         offline U3h soup 4.07 / 2.71.
+       Reads: synthetic effect = U2h vs U2r and U2o vs U2r (same rule as above); his vs our pool = U2h vs U2o, descriptive
+       (pool size, text domain and epochs all differ). Base comparison with his data = U2h vs N2h; N2h is also our
+       in-pipeline rerun of his phone recipe (no soup, our schedule), so N2h vs his 8.13 checks the pipeline.
 1. **Contextual biasing / LM fusion for unseen words (decode-only, ~4 GPU-h).** The page says errors are
    very consistent across Whisper variants (so more ensembling has a ceiling) and lists "personalised phrase completion" as
    future work. Not in Tianyu's ablations. Apply to Tianyu-style best checkpoints we reproduce (encoder-only + old data):
