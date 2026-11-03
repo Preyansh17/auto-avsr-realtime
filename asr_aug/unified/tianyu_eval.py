@@ -3,6 +3,7 @@
     python tianyu_eval.py --model best.nemo --tag U2r_seed1 --mode offline
     python tianyu_eval.py --model best.nemo --tag U2r_seed1 --mode stream --chunk 0.08 --right 0.08   # buffered (unified)
     python tianyu_eval.py --model best.nemo --tag N2r_seed1 --mode cache --att 70,1                   # cache-aware (nemotron_en)
+    python tianyu_eval.py ... --mode cache --att 70,1 --boost clean.txt --boost-alpha 2               # + phrase boosting
 
 Sets and clips come from the package's phone_streaming_nemotron/data/eval_*.csv (read only, extracted to --pkg);
 references and metrics are the package's tools/score.py (WER, exact, le1, new-word recall), so numbers compare 1:1 with
@@ -36,6 +37,8 @@ def main():
     ap.add_argument("--chunk", type=float, default=0.08)
     ap.add_argument("--right", type=float, default=0.08)
     ap.add_argument("--att", default="70,1", help="cache-aware att_context_size (70,1 = 80 ms look-ahead, 70,13 = 1.04 s)")
+    ap.add_argument("--boost", help="cache mode: phrase list for NeMo GPU phrase boosting (one phrase per line)")
+    ap.add_argument("--boost-alpha", type=float, default=1.0)
     ap.add_argument("--lang", default="en")
     ap.add_argument("--pkg", default=PKG)
     ap.add_argument("--nemo-repo", default="/scratch/pa2753/unified/Speech")  # main clone = the nemo31 env
@@ -48,6 +51,9 @@ def main():
     mdir = f"{a.out}/manifests"; os.makedirs(mdir, exist_ok=True)
     cfg = {"offline": "offline", "stream": f"L{a.left:g}_C{a.chunk:g}_R{a.right:g}",
            "cache": f"cache{a.att.replace(',', '_')}"}[a.mode]
+    if a.boost:  # e.g. cache70_1_bclean_a2
+        assert a.mode == "cache", "--boost is wired for cache mode only"
+        cfg += f"_b{stem(a.boost)}_a{a.boost_alpha:g}"
     if os.path.exists(f"{a.out}/{a.tag}_{cfg}_scores.json"):  # done before a preemption: skip, so requeues resume
         print(f"skip {a.tag} {cfg}: scores exist"); return
 
@@ -83,7 +89,9 @@ def main():
             odir = f"{a.out}/{a.tag}_{cfg}_{s}_cache"
             subprocess.run([sys.executable, f"{a.nemo_repo}/examples/asr/asr_cache_aware_streaming/speech_to_text_cache_aware_streaming_infer.py",
                             mref, f"dataset_manifest={mpath}", f"output_path={odir}",
-                            f"att_context_size=[{a.att}]", "online_normalization=true", "batch_size=8"], check=True)
+                            f"att_context_size=[{a.att}]", "online_normalization=true", "batch_size=8"]
+                           + ([f"rnnt_decoding.greedy.boosting_tree.key_phrases_file={a.boost}",
+                               f"rnnt_decoding.greedy.boosting_tree_alpha={a.boost_alpha}"] if a.boost else []), check=True)
             pred = [json.loads(l) for f in os.listdir(odir) if f.endswith(".json") for l in open(f"{odir}/{f}")]
             assert len(pred) == len(rows), "cache-aware output length differs"
             hyps = [p["pred_text"] for p in pred]

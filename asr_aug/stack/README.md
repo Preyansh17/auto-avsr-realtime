@@ -93,3 +93,16 @@ Summary and tables: PLAN.md section 3.6. Raw outputs: `results/report_stack.out`
 - Item 1: all six primaries fail (no method helps on either arm). The dominant failure is repetition loops (prompt with
   the words list, n-gram at lam >= 0.2, LLM at mu >= 0.05).
 - report_bias.py fix before its first full run: `loop()` returned an empty Counter on hyps under 4 words (TypeError).
+
+## E2R: room-simulated synthetic (PLAN.md 3.3 item 5; pre-registered 2026-10-29, before any RIR clip or E2R run existed)
+Motivation: step 0 (`diag_synth.py`) found the kept Higgs clips are not easier than real ones, but they are clean
+studio audio while the patient clips are room recordings (lit review 1.4: RIR closes the synthetic-real gap).
+- **Arm E2R** = E2 with identical data draw (same clips, same order, seeds 1-5) and recipe; every synthetic clip is
+  replaced by its room-simulated copy (`rir_synth.py`, `rir.sbatch`). One factor changes: synthetic room/channel.
+- **Simulation** (deterministic per clip): exponential-tail RIR, RT60 ~ U(0.15, 0.50) s, DRR ~ U(0, 10) dB; plus noise
+  cut from the quietest frames of that patient's real *train* clips, at an SNR drawn from the same patient's real
+  per-clip SNR estimates. Original length and RMS kept. Fixed before training; no tuning on val/test.
+- **Primary:** E2R - E2 on s1_oov, single seeds, val-selected checkpoint, paired two-level bootstrap (4000 draws).
+  "E2R helps" = 95% CI upper bound < 0. `report_rir.py`.
+- **Secondary** (CIs, no claims): s1_test, s2_test, s2_oov; last checkpoint; E2R soup vs E2 soup.
+- Limit: s1_oov seed sd was ~2.2 pp in E2, so effects under ~3-4 pp are unlikely to resolve.

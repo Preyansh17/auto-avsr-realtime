@@ -7,6 +7,9 @@ E2 = E1 + s2 (semg2 train, 240) + synthetic, 0.5 x real per voice, each voice's 
      semg1 voice: round(0.5 * (314 + 240)) clips, half from the ONS pool (old-data adapter B_r64,
      asr_aug/data/synth_kept_{A,B}.csv) and half from the Oct 1 adapter pool (stack/data/synth_kept_s1_{A,B}.csv);
      semg2 voice: round(0.5 * 240) clips from stack/data/synth_kept_s2_{A,B}.csv.
+E2R = E2 with the same draw (same rng key, so the same clips and order), but every synthetic row points at its
+     room-simulated copy (rir_synth.py: simulated RIR + the patients' own noise floor), root/synth_rir instead of
+     root/synth_higgs_b8. Pre-registered 2026-10-29 (README.md, "E2R").
 Synthetic sentences equal to any s1 or s2 val/test/oov sentence are dropped before drawing (the stack pools already
 exclude them; the ONS pool is re-checked here). Draws use the training seed.
 """
@@ -41,14 +44,14 @@ def draw(rng, pools, n, held, text_of):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--arm", choices=["E1", "E2"], required=True)
+    ap.add_argument("--arm", choices=["E1", "E2", "E2R"], required=True)
     ap.add_argument("--seed", type=int, required=True)
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
-    rng = random.Random(f"stack-{a.arm}-{a.seed}")
+    rng = random.Random(f"stack-{'E2' if a.arm == 'E2R' else a.arm}-{a.seed}")
     old, s1, s2 = rows(OLD), rows(f"{L}/s1_train_spm1023.csv"), rows(f"{L}/s2_train_spm1023.csv")
     out = old + s1
-    if a.arm == "E2":
+    if a.arm in ("E2", "E2R"):
         held = {norm(json.loads(l)["transcript"]) for p in ("s1", "s2") for r in ("val", "test", "oov")
                 for l in open(f"{ROLES}/{p}_{r}.jsonl")}
         text_of = {i["rel_path"]: i["norm"] for i in json.load(open(f"{H}/synth_info.json"))}
@@ -58,8 +61,11 @@ def main():
         syn = draw(rng, [f"{H}/synth_kept_A.csv", f"{H}/synth_kept_B.csv"], n1_old, held, text_of)
         syn += draw(rng, [f"{S}/synth_kept_s1_A.csv", f"{S}/synth_kept_s1_B.csv"], n1 - n1_old, held, text_of)
         syn += draw(rng, [f"{S}/synth_kept_s2_A.csv", f"{S}/synth_kept_s2_B.csv"], round(RATIO * len(s2)), held, text_of)
+        if a.arm == "E2R":
+            assert all(r.startswith("synth_higgs_b8,") for r in syn)
+            syn = ["synth_rir," + r.split(",", 1)[1] for r in syn]
         out = out + s2 + syn
-        print(f"E2 synthetic: semg1 old-adapter {n1_old}, semg1 Oct 1 adapter {n1 - n1_old}, semg2 {round(RATIO * len(s2))}")
+        print(f"{a.arm} synthetic: semg1 old-adapter {n1_old}, semg1 Oct 1 adapter {n1 - n1_old}, semg2 {round(RATIO * len(s2))}")
     rng.shuffle(out)
     open(a.out, "w").write("\n".join(out) + "\n")
     print(f"{a.arm} seed {a.seed}: {len(out)} rows -> {a.out}")

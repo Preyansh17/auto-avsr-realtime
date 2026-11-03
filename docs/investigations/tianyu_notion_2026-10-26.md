@@ -91,3 +91,46 @@ A demo runs on a 3070 server.
 - Data collection: semg-new 350 fixed vs 350 open-vocab; PD revisit with phone app.
 - Future: personalised phrase completion (LLM + personal memory, dialogue/command context as prior); clarify the video gain; realistic synthetic patient data.
 - **Synthetic video for semg patients has failed so far**: the generators need audio as a condition, and semg3 has none.
+
+## 6. Added since the first read (re-read 2026-10-28; page shows "Edited 2d ago")
+New blocks are at the end of the page, under "subsample wer by sentence length". Tables are text unless noted.
+
+**semg2 test-open** (38 sentences, oct16 split = our `s2ov_test` role; audio, offline unless noted). WER, then % of
+sentences with 0 / 1 / 2 / >=3 errors:
+
+| model | train data | WER | 0 | 1 | 2 | >=3 |
+|---|---|---|---|---|---|---|
+| Whisper large-v3, untrained | — | 49.6 | 23.7 | 10.5 | 10.5 | 55.3 |
+| Parakeet, untrained | — | 52.4 | 15.8 | 15.8 | 15.8 | 52.6 |
+| Nemotron, untrained | — | 70.3 | 10.5 | 7.9 | 10.5 | 71.1 |
+| Phone model (Nemotron + synthetic) | 50-word only | 8.1 | 68.4 | 18.4 | 5.3 | 7.9 |
+| Whisper full FT + synthetic, 3 seeds | 50-word only | 11.7 | 67.5 | 12.3 | 9.6 | 10.5 |
+| Whisper enc-only + synthetic (TTS on 50-word), 3 seeds | open-vocab train 189 | 4.2 | 86.0 | 7.9 | 2.6 | 3.5 |
+| Whisper enc-only + synthetic (TTS on open-vocab), 3 seeds | open-vocab train 189 | 3.4 | 86.0 | 8.8 | 2.6 | 2.6 |
+| Whisper weight average, 2 TTS x 3 seeds (6 models) | open-vocab train 189 | 2.0 | 89.5 | 7.9 | 2.6 | 0.0 |
+| Whisper weight average, 2 TTS x 6 seeds (12 models) | open-vocab train 189 | **1.6** | 92.1 | 5.3 | 2.6 | 0.0 |
+| Nemotron + synthetic, 3 seeds | open-vocab train 189 | 5.7 | 73.7 | 18.4 | 5.3 | 2.6 |
+| Nemotron streaming 1.04 s, 3 seeds | open-vocab train 189 | 5.8 | 72.8 | 19.3 | 5.3 | 2.6 |
+| Nemotron streaming 80 ms, 3 seeds | open-vocab train 189 | 8.8 | 65.8 | 15.8 | 14 | 4.4 |
+
+**semg3 open-vocab test** (53 sentences, open-vocab-v3.3 split = our `s3ov_test`; lip reading, offline unless noted):
+
+| model | train data | WER | 0 | 1 | 2 | >=3 |
+|---|---|---|---|---|---|---|
+| USR 2.0, untrained | — | 17.1 | 45.3 | 22.6 | 15.1 | 17.0 |
+| API v4 model (deployed) | 50-word only | 10.4 | 58.5 | 18.9 | 18.9 | 3.8 |
+| New recipe (aug + old semg1), 3-seed weight avg | 50-word + old semg1 | 9.0 | 67.9 | 17.0 | 11.3 | 3.8 |
+| 50-word only, 3 seeds | 50-word 240 | 9.7 | 61.6 | 19.5 | 13.2 | 5.7 |
+| Open-vocab only, 3 seeds | open-vocab 262 | 8.6 | 65.4 | 17.6 | 13.8 | 3.1 |
+| Both sets, 3 seeds (best offline) | 240 + 262 | **6.7** | 72.3 | 14.5 | 10.1 | 3.1 |
+| Streaming 1.28 s, no open-vocab, 3 seeds | 50-word + old semg1 | 12.4 | 57.9 | 23.9 | 6.9 | 11.3 |
+| Streaming 0.64 s, both sets, 3 seeds (best streaming, val) | 240 + 262 | 11.4 | 59.1 | 20.1 | 12.6 | — |
+
+An image above it (read by eye) gives the same semg3 rows plus new-word rates (85-89%) and variants: both + old semg1
+7.61, both + old 3-seed weight avg 6.94, streaming 1.28 s both + old 10.21, 0.64 s both + old 12.04.
+
+**Deployment notes** (free text): look at error patterns behind the "75%" figure (all-correct vs every sentence a few
+errors; is the right answer among the offered options; does a second attempt succeed); shaking, and missed start/end;
+align preprocessing (shake, start/end) with inference to propose better options; loop: eval WER -> data sent back ->
+update models. A heading "subsample and curriculum learning" sits above the best-results block (no text under it).
+Older image blocks were not re-read.

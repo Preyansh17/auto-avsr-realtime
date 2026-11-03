@@ -134,6 +134,8 @@ streaming, and a demo. Same split rows as ours (large-v3 zero-shot semg1 test30 
 | semg1 | 4.1 / 10.0 (encoder-only + old data; weight avg 4.5 / 12.4, vote 3.9 / 10.3) | 7.0 ± 2.5 / 22.0 ± 2.8 (full FT N / ONS, 10 seeds) | behind on both, ~12 pp on OOV |
 | semg2 | 0.6 / 2.7 (L3 full FT + zero-shot Higgs); Nemotron + both Higgs 3.0 / 2.1 | 0.6 / 5.7 (legacy prefix) | behind ~3 pp on OOV |
 | semg3 | 0.59 / 4.24 (USR 2.0 lip reading + video aug + old semg1, α=0.75) | none | not started |
+| semg2 open-vocab (s2ov_test, 38) | 1.6 (Whisper enc-only + synthetic, 12-model weight avg; Nemotron + synth 5.7; untrained L3 49.6 / Nemotron 70.3) | none | not run |
+| semg3 open-vocab (s3ov_test, 53) | 6.7 lip reading (both sentence sets, 3 seeds); streaming 0.64 s 11.4 | none | not started |
 | streaming | semg1 9.7 / 16.4 at 1.04 s; semg3 1.97 / 5.12 at 1.28 s; Mac/iPhone demo | patient: none (merged split only) | behind |
 | TORGO | real 20.6, hybrid 18.5 (Whisper-medium, single runs) | Nemotron sentences 20.05 ± 0.14 on a harder text-disjoint split | about level |
 
@@ -145,6 +147,7 @@ Granite zoo, semg3 audio (32.5 / 61.8, useless) vs lips (2.4 / 11.8), streaming 
 This drops my earlier T3 (find the patient set: same split), T4 (semg3 audio baseline: done, video wins) and T5 (latency: done).
 
 ### 3.3 What is left that Tianyu has not done (ordered)
+Re-read of the page 2026-10-28: open-vocab test results added for semg2 (s2ov) and semg3 (s3ov), see the transcription section 6.
 Each one is grounded in a gap the page states or a result it shows.
 0. **Benchmark nvidia/nemotron-labs-unified-asr-0.6b (user request 2026-10-28; run first, ~2 GPU-h).** Released on
    HF 2026-10-27: Unified FastConformer-RNNT, 600M, 25 languages incl. English, one checkpoint for offline and buffered
@@ -353,14 +356,30 @@ Each one is grounded in a gap the page states or a result it shows.
        Best per latency vs Tianyu (descriptive, one soup each): 80 ms N2r soup cache70_1 8.94 / 9.50 vs his 8.13 / 9.05
          (behind 0.81 / 0.45); 1.04 s N2h soup cache70_13 5.69 / 6.33 vs his 5.69 / 8.14 (tie / ahead);
          offline U3h soup 4.07 / 2.71.
-       Reads: synthetic effect = U2h vs U2r and U2o vs U2r (same rule as above); his vs our pool = U2h vs U2o, descriptive
-       (pool size, text domain and epochs all differ). Base comparison with his data = U2h vs N2h; N2h is also our
-       in-pipeline rerun of his phone recipe (no soup, our schedule), so N2h vs his 8.13 checks the pipeline.
        560 ms lag (cache70_6, 480 ms look-ahead; job cache706 21667115, asr_aug/unified/cache706.sbatch), test30 / oov50 /
          test_open38 / conv34: N2r soup 0.59 / 1.75 / 7.32 / 6.33 (seed mean 0.59 / 1.75 / 8.67 / 6.63);
          N2h soup 0.59 / 2.19 / 8.94 / 8.14 (seed mean 0.59 / 2.92 / 7.86 / 8.90). Unified at 560 ms (C0.16/R0.4)
          U3h soup 15.45 / 11.76 on test_open38 / conv34. No Tianyu number at this lag.
-1. **Contextual biasing / LM fusion for unseen words (decode-only, ~4 GPU-h).** The page says errors are
+       Reads: synthetic effect = U2h vs U2r and U2o vs U2r (same rule as above); his vs our pool = U2h vs U2o, descriptive
+       (pool size, text domain and epochs all differ). Base comparison with his data = U2h vs N2h; N2h is also our
+       in-pipeline rerun of his phone recipe (no soup, our schedule), so N2h vs his 8.13 checks the pipeline.
+     - **Step 5 pre-registration (2026-11-03, user: "continue"; no Step 5 result read).** Target: the 160 ms gap
+       (N2r soup cache70_1 8.94 / 9.50, oov50 2.63 vs Tianyu 8.13 / 9.05 / 1.32). Two decode-only arms, nemotron_en only.
+       S6: one uniform soup of all 6 nemotron_en seeds (N2r 1-3 + N2h 1-3, same base). Scored offline, cache70_1,
+         cache70_6, cache70_13. Read, descriptive (one model): S6 vs the N2r and N2h soups per lag.
+       PB: NeMo GPU phrase boosting (rnnt_decoding.greedy.boosting_tree, decode-time only) at cache70_1 on the N2r soup
+         and N2r seeds 1-3. Phrase lists (asr_aug/unified/make_boost_lists.py), reported apart:
+           clean (the claim): the unique sentences of our real train set (s2ov_train + s2_train, 429 clips), i.e. text
+             the model already trains on; no eval text.
+           words (ceiling): clean + the eval-set words absent from the train vocabulary ("a caregiver supplies the
+             vocabulary"); test words are known, so never the claim, and never compared with Tianyu.
+         alpha in {0.5, 1, 2, 4}, picked per list by lowest pooled val25 + val30 WER on the N2r soup; other alphas
+         descriptive. Primary: clean PB minus no-boost at the picked alpha, on test_open38, oov50, conv34. "Helps" = all
+         3 seeds lower than their own no-boost WER and seed-mean gap >= 1 pt on that set, with test30 not worse by
+         more than 0.5 pt. Item 1's closed biasing failed by repetition loops in Whisper's autoregressive decoder; PB
+         works inside RNNT greedy decoding (one label per frame), so loops are not expected; count hyps with a word
+         repeated 3+ times in a row anyway.
+1. **DONE 2026-10-28, null (3.6).** **Contextual biasing / LM fusion for unseen words (decode-only, ~4 GPU-h).** The page says errors are
    very consistent across Whisper variants (so more ensembling has a ceiling) and lists "personalised phrase completion" as
    future work. Not in Tianyu's ablations. Apply to Tianyu-style best checkpoints we reproduce (encoder-only + old data):
    (a) shallow fusion with an n-gram LM over the patient's sentence material plus the 10k corpus, (b) Whisper prompt /
@@ -371,7 +390,7 @@ Each one is grounded in a gap the page states or a result it shows.
    semg1/semg2-adapted voice, or a voice matched to semg3's mouth timing), drive a lip-sync generator on semg3 face crops,
    add the clips to USR 2.0 training. Bar: semg3 OOV50 < 4.24. Gate first: generated mouth crops must be readable by the
    current semg3 lip model (its WER on synthetic clips < 30%) before any training.
-3. **Stack the separately-winning semg1 ingredients, 5 seeds (~1 GPU-day).** encoder-only + old data + both patients +
+3. **DONE 2026-10-28, primary passes (3.6).** **Stack the separately-winning semg1 ingredients, 5 seeds (~1 GPU-day).** encoder-only + old data + both patients +
    fine-tuned Higgs synthetic (13.0 single run) + weight averaging (12.4) + vote (10.3). It is not clear from the page whether
    the 10.0 headline already stacks all of them; the run confirms or improves it, with an interval. Prerequisite for item 1
    (we need that checkpoint family locally).
@@ -379,8 +398,98 @@ Each one is grounded in a gap the page states or a result it shows.
    per-speaker Higgs adapters plus 5-15 h LibriSpeech text, 5 seeds. Note: Tianyu found TORGO doesn't help the patients,
    so this is only a TORGO benchmark result.
 
+**New order (user 2026-10-29): after item 0 finishes, do items 5-8 next, then 2 and 4.**
+
+5. **Synthetic-data study beyond Higgs: literature review, then benchmark.** First a literature review of TTS models
+   that can be fine-tuned on a few minutes of dysarthric speech (voice-cloning / LoRA / adapter-capable; open weights).
+   Then benchmark the top 2-3 against Higgs on the same pipeline (same filter, same Whisper E2 recipe, seeds 1-5). The
+   factors to vary, one at a time:
+   - TTS model: Higgs vs the shortlisted alternatives.
+   - Fine-tuning strategy: zero-shot cloning, LoRA, full fine-tune, per-patient vs pooled adapter.
+   - Generation material: what text we prompt with (patient 50-word set, open-vocab / caregiver phrases, LibriSpeech-
+     style generic, conversational turns) and how much (dose curve).
+   - Synthetic quality: intelligibility (ASR judge), speaker similarity, dysarthric-severity match. Check whether
+     quality predicts the ASR gain.
+   - Hard rule: no generated sentence may appear in any val, test, oov or s2ov/s3ov eval set, checked by exact and
+     normalised string match before training.
+   Gate: do the review and shortlist first; a benchmark run needs a model that passes the Higgs filter at a similar
+   keep rate.
+   - **Review done 2026-10-29: `docs/investigations/tts_synthetic_lit_review_2026-10-29.md`.**
+     - Main finding: off-the-shelf zero-shot TTS (F5, Higgs) regresses dysarthric speech toward healthy, intelligible
+       speech. The one published Higgs study (Singh et al., Interspeech 2026, TORGO) also finds that hybrid data does
+       not beat real-only on average, which matches our null. The methods that help model rhythm and pathology
+       explicitly (DARS, IndexTTS + pathology-prefix LoRA).
+     - Shortlist: IndexTTS-2 + pathology LoRA, F5-TTS fine-tuned, VoxCPM2 LoRA, with Higgs as the reference.
+     - Cheapest first: (step 0) check whether our filtered Higgs clips are easier than real clips for the ASR judge;
+       then add an RIR post-processing arm on the existing Higgs clips. Neither needs a new generator.
+   - **Step 0 done 2026-10-29 (`asr_aug/stack/diag_synth.py`, job 21326631; report at
+     /scratch/pa2753/stack/data/diag_report.md).** Zero-shot whisper-large-v3 WER as a neutral judge, plus rate, pause
+     fraction and WavLM-sv similarity to the real-train centroid. Kept pool-A vs real train:
+
+     | patient | zs_wer mean | zs_wer capped at 1 | frac clips < 0.5 | sec/word | spk_sim |
+     |---|---|---|---|---|---|
+     | s1 real train / synth A kept | 1.059 / 0.933 | 0.909 / 0.924 | 0.04 / 0.02 | 0.865 / 0.870 | 0.921 (LOO) / 0.890 |
+     | s2 real train / synth A kept | 0.302 / 0.462 | 0.269 / 0.418 | 0.73 / 0.57 | 0.883 / 0.834 | 0.951 (LOO) / 0.954 |
+
+     - Pre-registered rule: s1 formally "easier" (gap +12.6 pp); s2 not (synthetic 16 pp *harder*).
+     - The s1 gap is an artefact: Whisper is at the floor on s1 (median WER 1.0 in every group), and the gap comes
+       entirely from hallucinated insertions on the real clips. Capped at 1, synthetic and real are equal (0.924 vs
+       0.909).
+     - **Reading: the cleanup failure (lit review 1.1) does not explain our Higgs null.** Kept clips are as hard as
+       real (s1) or harder (s2), and speaking rate and speaker similarity are close to real. The s2 extra difficulty is
+       more likely TTS artefacts than pathology. The only clear acoustic gap is pause/silence fraction (synthetic about 2x,
+       0.011-0.016 vs 0.006-0.007), which fits the RIR/channel-mismatch idea.
+     - Selecting for "harder" synthetic clips is therefore not supported. Next cheapest step stays the RIR + room-noise
+       arm on the existing clips. 12 clips under 1 s were zero-padded for spk_sim; all are in rejected groups.
+   - **RIR arm E2R pre-registered 2026-10-29 (user go-ahead), before any RIR clip existed:** design and rule in
+     `asr_aug/stack/README.md` ("E2R"). E2 with the same draw and recipe, synthetic clips room-simulated (simulated RIR +
+     the patients' own noise floor at real-matched SNR). Primary E2R - E2 on s1_oov, 5 seeds, helps = CI upper < 0.
+   - **E2R result 2026-10-29: null** (`asr_aug/stack/results/report_rir.out`; seeds 1-5, val-selected checkpoint).
+     Primary E2R - E2 on s1_oov: **+0.81 pp [-3.30, +5.27], p 0.72**, so the rule (CI upper < 0) is not met. WER % E2 vs E2R
+     (single-seed mean): s1_test 7.57 vs 6.27 (-1.30 [-4.07, +1.00]), s1_oov 15.16 vs 15.96, s2_oov 2.63 vs 2.46,
+     s2_test 0.59 both. Soup: s1_oov 8.07 vs 8.52, s2_oov 1.75 vs 1.32. Last epoch agrees (s1_oov +0.72 [-2.31, +3.69]).
+     Room/channel mismatch is not what limits the Higgs clips either. Together with step 0, the cheap no-new-generator
+     fixes are exhausted. The remaining item-5 route is a different generator (shortlist: IndexTTS-2 + pathology LoRA,
+     F5-TTS fine-tuned, VoxCPM2 LoRA).
+   - **Generator benchmark drafted 2026-10-30: `asr_aug/gen/README.md`** (not started; needs the user's go and an OK
+     on the bilibili licence). G1 = IndexTTS-2 + per-patient speaker LoRA; G2 = ProtoDisent (IndexTTS-1.5 +
+     pathology prefix + GRL), trained pooled with the TORGO controls (not on the cluster yet). Gate on keep rate and
+     closeness to real (step 0 metrics) vs Higgs, then E2Gx - E2 on s1_oov, 5 seeds, Bonferroni over generators.
+   - **G1 gate 2026-11-01: FAIL on s1 and s2, so no Step B for G1** (`results/gen_gate/g1_gate_report.md`). G1 is
+     only closer to real than Higgs on spk_sim. Its speech is about 55% too slow: 1.35 sec/word against 0.87 real
+     (s1) and 0.88 (s2), where Higgs is 0.92 / 0.89. Most rejections are duration rejections. Keep rate is 0.23 vs
+     Higgs 0.38 on s1, and 0.36 vs 0.88 on s2.
+   - **G1d (G1 + s2mel duration control, README amendment 2) 2026-11-02: FAIL on s1 and s2**
+     (`results/gen_gate/g1d_gate_report.md`).
+     - The rate is fixed: 0.81 / 0.85 sec/word, and keep rate is at least 0.5x Higgs for every voice.
+     - The 2x compression costs s1 its voice match (spk_sim 0.76, against Higgs 0.89) and s2 its intelligibility
+       (zs_wer 0.68, against real 0.27).
+     - The G1 line is closed. G2 (ProtoDisent) was run next (README amendment 3).
+   - **G2 (ProtoDisent, README amendment 3) 2026-11-03: FAIL on s1 and s2** (`results/gen_gate/g2_gate_report.md`).
+     - Best keep rates of any generator (s1 0.70 vs Higgs 0.38), but closer to real than Higgs on only one metric
+       per patient: s1 on rate, s2 on zs_wer.
+     - s1 is far too intelligible (zs_wer 0.52 vs real 0.91), the voice match is weak (spk_sim 0.68 s1, 0.82 s2,
+       against Higgs 0.89 / 0.95), and clips have many more pauses than real speech.
+     - **Item 5's generator benchmark ends here, as pre-registered: no generator passed the gate, so no Step B (no
+       E2Gx ASR arms).** Higgs stays the synthetic generator.
+6. **Diffusion- and GAN-based audio generation (user idea 2026-09-28).** Look beyond Higgs's LLM-style (discrete-token)
+   generation: diffusion or flow-matching TTS and GAN vocoders, or voice conversion of healthy speech into the patient's
+   voice. Either use one as a generator in item 5's benchmark, or bring a useful technique into Higgs (e.g. a
+   diffusion/flow decoder or a better vocoder). Covered by the same literature review as item 5.
+7. **Conversation-style data (user idea 2026-10-09, followed up 2026-10-13).** Adapt the collection approach of the
+   artificial-conversations ASR paper (to be discussed with Adeen). Collect real conversation recordings to test how the
+   models do on actual dialogue, which none of our current test sets cover. Tianyu's related idea: TV-show dialogues and
+   conversation history as a decoding prior. Conversational text is also a candidate generation material for item 5.
+8. **Test-time adaptation (arXiv 2610.23117, Wang et al., NCMMSC 2026).** That paper builds a sentence-level dysarthric
+   AVSR corpus from CDSD videos. It then applies unsupervised test-time adaptation with SGEM (sequence-level generalised
+   entropy minimisation) and reports significant CER gains on unseen dysarthric speakers. For us: try SGEM on our
+   fine-tuned Whisper / Nemotron for a new session or a new patient (semg1 new data, s2ov). It is decode-time only,
+   no labels needed.
+
 ### 3.4 Closed (ours)
 H2 target-vocab synthetic (null); semg2 per-patient vs pooled (floor); earlier list in 1.2.
+Contextual biasing as pre-registered (prompt / token 4-gram fusion / Qwen2.5-1.5B rescoring, no loop guards): null,
+repetition loops (3.6). Stack E2 vs E1: done, helps OOV (3.6).
 
 ### 3.5 Shared-split eval set up (2026-10-26)
 Splits are Tianyu's own tree (th3482 = Tianyu He): our s1/s2 labels are `LATEST_combined/roles/s{1,2}_*` (now combined_v6), so the rows are already shared.

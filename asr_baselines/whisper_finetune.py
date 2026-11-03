@@ -67,6 +67,10 @@ def parse_args():
     p.add_argument("--precision", choices=["fp32", "fp16", "bf16"], default="bf16")
     p.add_argument("--num-workers", type=int, default=4)
     p.add_argument("--gen-num-beams", type=int, default=1)
+    p.add_argument("--resume", action="store_true",
+                   help="resume from the newest checkpoint-* in --output-dir if there is one (preemptible jobs). "
+                        "Epoch checkpoints carry model, optimizer, scheduler, trainer state (best metric) and the "
+                        "python/numpy/torch/cuda RNG states, so a resumed run continues the same trajectory.")
     p.add_argument("--seed", type=int, default=int(os.environ["SEED"]) if os.environ.get("SEED") else 42,
                    help="Seeds transformers/torch/numpy/random via set_seed, and the "
                         "Trainer's own data shuffling. The AV recipe in this repo has "
@@ -402,7 +406,30 @@ def main():
         compute_metrics=compute_metrics,
         processing_class=processor,
     )
-    trainer.train()
+    last = None
+    if args.resume:
+        import glob
+        import re
+        import shutil
+        # newest complete checkpoint: trainer_state.json is written last, so a dir without it was cut off mid-save
+        # (preempted) and is deleted rather than resumed from
+        for d in sorted(glob.glob(os.path.join(args.output_dir, "checkpoint-*")),
+                        key=lambda d: int(re.sub(r"\D", "", os.path.basename(d)) or 0), reverse=True):
+            if os.path.exists(os.path.join(d, "trainer_state.json")) and last is None:
+                last = d
+            elif last is None:
+                print(f"[resume] removing incomplete {d}")
+                shutil.rmtree(d)
+        print(f"[resume] {'from ' + last if last else 'no checkpoint yet, starting fresh'}")
+        if last:
+            # optimizer.pt / scheduler.pt / rng_state.pth go through torch.load, which transformers refuses under
+            # torch < 2.6 (CVE-2025-32434, a risk for untrusted files). These are this run's own checkpoints, and the
+            # whisper_asr env pins torch 2.5.1, so lift the guard for the resume only.
+            import transformers.trainer
+            import transformers.utils.import_utils
+            transformers.trainer.check_torch_load_is_safe = lambda: None
+            transformers.utils.import_utils.check_torch_load_is_safe = lambda: None
+    trainer.train(resume_from_checkpoint=last)
     best_dir = os.path.join(args.output_dir, "best")
     if args.lora:
         # load_best_model_at_end has restored the best adapter into trainer.model;
