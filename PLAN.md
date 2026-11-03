@@ -346,13 +346,20 @@ Each one is grounded in a gap the page states or a result it shows.
        U2o done 2026-11-02 (3-seed means, test_open38 / conv34): offline 8.13 / 6.18; C0.56/R0.56 10.98 / 8.14;
          C0.16/R0.4 14.90 / 13.88; C0.08/R0.08 40.65 / 48.87. Synthetic effect, our pool (U2o vs U2r): ties offline
          (+0.27 / -1.21), better at C0.56/R0.56 on test_open38 (-3.8), tie on conv34 (-1.66). His vs our pool (U2h vs U2o,
-         descriptive): his better offline (6.23 / 3.62 vs 8.13 / 6.18). U2o soup: soup4.
+         descriptive): his better offline (6.23 / 3.62 vs 8.13 / 6.18). U2o soup (soup4 21661560, test30 / oov50 /
+         test_open38 / conv34): offline 0.59 / 0.44 / 6.91 / 6.33; C0.56/R0.56 0.59 / 0.88 / 10.16 / 9.05; C0.16/R0.4
+         1.18 / 2.19 / 13.01 / 14.03; C0.08/R0.08 8.88 / 12.72 / 39.02 / 52.04; C0.08/R0 5.33 / 7.46 / 36.59 / 39.82.
+         Soup vs its seed mean: better on test_open38, worse on conv34 (offline -1.2 / +0.15, C0.56 -0.8 / +0.9); best-per-lag table unchanged.
        Best per latency vs Tianyu (descriptive, one soup each): 80 ms N2r soup cache70_1 8.94 / 9.50 vs his 8.13 / 9.05
          (behind 0.81 / 0.45); 1.04 s N2h soup cache70_13 5.69 / 6.33 vs his 5.69 / 8.14 (tie / ahead);
          offline U3h soup 4.07 / 2.71.
        Reads: synthetic effect = U2h vs U2r and U2o vs U2r (same rule as above); his vs our pool = U2h vs U2o, descriptive
        (pool size, text domain and epochs all differ). Base comparison with his data = U2h vs N2h; N2h is also our
        in-pipeline rerun of his phone recipe (no soup, our schedule), so N2h vs his 8.13 checks the pipeline.
+       560 ms lag (cache70_6, 480 ms look-ahead; job cache706 21667115, asr_aug/unified/cache706.sbatch), test30 / oov50 /
+         test_open38 / conv34: N2r soup 0.59 / 1.75 / 7.32 / 6.33 (seed mean 0.59 / 1.75 / 8.67 / 6.63);
+         N2h soup 0.59 / 2.19 / 8.94 / 8.14 (seed mean 0.59 / 2.92 / 7.86 / 8.90). Unified at 560 ms (C0.16/R0.4)
+         U3h soup 15.45 / 11.76 on test_open38 / conv34. No Tianyu number at this lag.
 1. **Contextual biasing / LM fusion for unseen words (decode-only, ~4 GPU-h).** The page says errors are
    very consistent across Whisper variants (so more ensembling has a ceiling) and lists "personalised phrase completion" as
    future work. Not in Tianyu's ablations. Apply to Tianyu-style best checkpoints we reproduce (encoder-only + old data):
