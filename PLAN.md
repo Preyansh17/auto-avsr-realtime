@@ -379,6 +379,21 @@ Each one is grounded in a gap the page states or a result it shows.
          more than 0.5 pt. Item 1's closed biasing failed by repetition loops in Whisper's autoregressive decoder; PB
          works inside RNNT greedy decoding (one label per frame), so loops are not expected; count hyps with a word
          repeated 3+ times in a row anyway.
+       **Step 5 result (2026-11-04, jobs 21718019 / 21718022), test30 / oov50 / test_open38 / conv34:**
+         S6 (6-seed soup) offline 0.59 / 0.88 / 5.69 / 4.98; cache70_1 (160 ms) 0.59 / 1.75 / 7.72 / 5.88;
+           cache70_6 (560 ms) 0.59 / 1.32 / 9.35 / 4.52; cache70_13 (1.12 s) 0.59 / 0.88 / 5.69 / 4.98.
+           vs N2r soup at 160 ms (0.59 / 2.63 / 8.94 / 9.50): better on oov50, test_open38, conv34. vs Tianyu 160 ms
+           (1.78 / 1.32 / 8.13 / 9.05): ahead on test30, test_open38 (-0.41), conv34 (-3.17); behind on oov50 (+0.43,
+           about 1 word). vs Tianyu 1.04 s (5.69 / 8.14): tie / -3.16. Descriptive, one model, no test-set tuning.
+           560 ms test_open38 (9.35) worse than 160 ms (7.72) on the same model: 38-clip noise, so lag is not tuned on it.
+         PB: null. Val picks alpha 0.5 for both lists, and even that is worse on val than no boost (soup 7.10 vs 6.80).
+           Clean alpha 0.5 minus no-boost (seeds 1/2/3): test_open38 -0.41 / 0 / 0, oov50 +0.88 / +0.44 / 0,
+           conv34 0 / 0 / +0.91, test30 +0.60 / 0 / +1.78. Fails "helps" on every set. Ceiling (words, alpha 0.5):
+           test_open38 -1.22 / -0.82 / -0.41 (all lower, mean -0.82 < 1 pt), others flat or worse: fails too.
+           alpha >= 1 wrecks every set (test30 7.7-36). No repetition loops (0 hyps with a word 3x in a row): the
+           failure is boosted phrases replacing correct words, mostly on the closed-set test30.
+       Best per lag after Step 5: 160 ms and 1.12 s = S6; 560 ms = S6 on conv34 / N2r soup on test_open38;
+         offline = U3h soup. PB closed.
 1. **DONE 2026-10-28, null (3.6).** **Contextual biasing / LM fusion for unseen words (decode-only, ~4 GPU-h).** The page says errors are
    very consistent across Whisper variants (so more ensembling has a ceiling) and lists "personalised phrase completion" as
    future work. Not in Tianyu's ablations. Apply to Tianyu-style best checkpoints we reproduce (encoder-only + old data):
@@ -485,11 +500,20 @@ Each one is grounded in a gap the page states or a result it shows.
    entropy minimisation) and reports significant CER gains on unseen dysarthric speakers. For us: try SGEM on our
    fine-tuned Whisper / Nemotron for a new session or a new patient (semg1 new data, s2ov). It is decode-time only,
    no labels needed.
+   - **Pre-registered 2026-11-03 (user pick "Item 8: SGEM TTA"), before any TTA decode: `asr_aug/tta/README.md`.**
+     Episodic SGEM (beam-5 pseudo-label, Renyi entropy + negative sampling, 10 steps) on the stack Whisper E1/E2
+     single seeds; scope (encoder LayerNorms or conv stem) and step count picked on val. Primaries (Holm over 2):
+     E2 on s1_oov; E1 on semg2 test+oov (unseen patient). Nemotron would be a later amendment.
+   - **Result 2026-11-04: null** (`results/tta/report_tta.out`). Every TTA cell is worse than no TTA on val; the
+     selected cell (LayerNorm, 1 step) gives E2 s1_oov +0.00 pp and E1 semg2 -0.15 pp, both Holm 1.0. Seed-paired
+     CIs put any effect under about 1 pp. TTA changes only 1-2% of hypotheses at the selected cell. The test-oracle
+     best step (the paper's reporting) gains at most 1.3 pp. Wang et al.'s gains came from models at 50-140% CER.
 
 ### 3.4 Closed (ours)
 H2 target-vocab synthetic (null); semg2 per-patient vs pooled (floor); earlier list in 1.2.
 Contextual biasing as pre-registered (prompt / token 4-gram fusion / Qwen2.5-1.5B rescoring, no loop guards): null,
-repetition loops (3.6). Stack E2 vs E1: done, helps OOV (3.6).
+repetition loops (3.6). NeMo GPU phrase boosting on nemotron_en at 160 ms (item 0 Step 5): null, no loops; boosted
+phrases replace correct words. Stack E2 vs E1: done, helps OOV (3.6).
 
 ### 3.5 Shared-split eval set up (2026-10-26)
 Splits are Tianyu's own tree (th3482 = Tianyu He): our s1/s2 labels are `LATEST_combined/roles/s{1,2}_*` (now combined_v6), so the rows are already shared.

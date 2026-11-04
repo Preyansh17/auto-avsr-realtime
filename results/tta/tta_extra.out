@@ -1,0 +1,12 @@
+seed-paired CI, TTA - step 0
+  selected E2 ln 1 s1_oov: +0.00 [-0.53, +0.51]
+  selected E1 ln 1 s2_eval: -0.15 [-1.06, +0.51]
+  step10 E2 ln 10 s1_oov: +0.36 [-1.30, +1.78]
+  step10 E2 feat 10 s1_oov: +11.57 [-1.71, +67.00]
+  step10 E1 ln 10 s2_eval: +0.15 [-1.18, +1.74]
+  step10 E1 feat 10 s2_eval: +0.05 [-1.62, +1.78]
+hypotheses changed from step 0 (of all utterances x 5 seeds)
+  E1 ln: step1 20/1095 (1.8%), step3 62/1095 (5.7%), step5 85/1095 (7.8%), step10 101/1095 (9.2%)
+  E1 feat: step1 41/1095 (3.7%), step3 97/1095 (8.9%), step5 130/1095 (11.9%), step10 159/1095 (14.5%)
+  E2 ln: step1 10/1095 (0.9%), step3 21/1095 (1.9%), step5 32/1095 (2.9%), step10 42/1095 (3.8%)
+  E2 feat: step1 20/1095 (1.8%), step3 46/1095 (4.2%), step5 52/1095 (4.7%), step10 65/1095 (5.9%)

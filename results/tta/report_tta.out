@@ -1,0 +1,45 @@
+
+== E1: pooled val WER (mean over seeds), step 0 = 7.69 (ln) / 7.69 (feat)
+| scope | step 1 | step 3 | step 5 | step 10 |
+|---|---|---|---|---|
+| ln | 7.75 | 8.02 | 8.02 | 7.97 |
+| feat | 7.91 | 8.08 | 7.91 | 8.19 |
+selected: ln step 1 (val 7.75 vs step 0 7.69)
+| set | step 0 | selected | oracle best step (descriptive) | loops step0 / selected |
+|---|---|---|---|---|
+| s1_val | 2.09 | 2.20 | 2.20 (ln 1) | 0 / 0 |
+| s1_test | 5.21 | 5.09 | 4.85 (ln 10) | 0 / 0 |
+| s1_oov | 20.81 | 20.99 | 19.55 (feat 5) | 0 / 0 |
+| s2_val | 13.30 | 13.30 | 13.30 (ln 1) | 0 / 0 |
+| s2_test | 9.94 | 9.94 | 8.99 (feat 5) | 0 / 0 |
+| s2_oov | 17.89 | 17.63 | 17.63 (ln 1) | 0 / 0 |
+| s2_eval | 14.51 | 14.36 | 14.06 (feat 3) |  |
+
+== E2: pooled val WER (mean over seeds), step 0 = 1.26 (ln) / 1.26 (feat)
+| scope | step 1 | step 3 | step 5 | step 10 |
+|---|---|---|---|---|
+| ln | 1.37 | 1.43 | 1.43 | 1.54 |
+| feat | 1.43 | 1.43 | 1.54 | 1.59 |
+selected: ln step 1 (val 1.37 vs step 0 1.26)
+| set | step 0 | selected | oracle best step (descriptive) | loops step0 / selected |
+|---|---|---|---|---|
+| s1_val | 1.87 | 2.09 | 2.09 (ln 1) | 0 / 0 |
+| s1_test | 6.75 | 6.63 | 6.15 (feat 5) | 0 / 0 |
+| s1_oov | 14.98 | 14.98 | 14.89 (feat 1) | 0 / 0 |
+| s2_val | 0.66 | 0.66 | 0.55 (feat 3) | 0 / 0 |
+| s2_test | 0.59 | 0.59 | 0.59 (ln 1) | 0 / 0 |
+| s2_oov | 2.72 | 2.72 | 2.72 (ln 1) | 0 / 0 |
+| s2_eval | 1.81 | 1.81 | 1.81 (ln 1) |  |
+
+PRIMARY (TTA - step 0, selected system, single seeds; Holm over 2)
+  1: E2 s1_oov: +0.00 pp [-4.44, +4.41] p=0.9860 Holm=1.0000 -> no claim
+  2: E1 s2_test+s2_oov (unseen patient): -0.15 pp [-4.20, +3.83] p=0.9680 Holm=1.0000 -> no claim
+
+secondary (TTA - step 0, selected system per arm)
+  E1 s1_test: -0.12 [-3.10, +2.79] p=0.9590
+  E1 s1_oov: +0.18 [-2.74, +3.41] p=0.9610
+  E1 s2_test: +0.00 [-4.14, +4.24] p=1.0000
+  E1 s2_oov: -0.26 [-6.32, +5.87] p=0.9080
+  E2 s1_test: -0.12 [-2.22, +1.88] p=0.9795
+  E2 s2_test: +0.00 [+0.00, +0.00] p=1.0000
+  E2 s2_oov: +0.00 [-1.73, +1.75] p=1.0000
