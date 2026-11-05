@@ -37,7 +37,7 @@ from filter_synth import norm, speech_fraction, wer_parts  # noqa: E402  (stack 
 G = "/scratch/pa2753/gen"
 GEN = os.environ.get("GEN", "g1")
 DESC = {"g1": "IndexTTS-2 + LoRA", "g1d": "IndexTTS-2 + LoRA + duration control",
-        "g2": "ProtoDisent (IndexTTS-1.5 + pathology prefix + GRL)"}
+        "g2": "ProtoDisent (IndexTTS-1.5 + pathology prefix + GRL)", "g3": "VoxCPM2 + LoRA"}
 DATA = f"{G}/data/{GEN}"
 FROOT = f"{G}/fl" if GEN == "g1" else f"{G}/fl_{GEN}"  # FROOT/root/synth_higgs_b8 -> gen/root/<GEN>, so rel paths and
 # dataset name match the Higgs rows
@@ -88,7 +88,8 @@ def cmd_score(_a):
     info = json.load(open(f"{DATA}/synth_info.json"))
     judge = {}
     for v in VOICES:
-        for r in csv.DictReader(open(f"{DATA}/judge_{v}.tsv"), delimiter="\t"):
+        # raw tab-separated; a hyp may open with a quote mark ('"I want...'), which default csv quoting reads across lines
+        for r in csv.DictReader(open(f"{DATA}/judge_{v}.tsv"), delimiter="\t", quoting=csv.QUOTE_NONE):
             judge[r["path"]] = (normalize(r["ref"]), normalize(r["hyp"]))
     rates = {v: rate_pools(v)[0] for v in VOICES}
     clips = []

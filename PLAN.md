@@ -522,6 +522,12 @@ Each one is grounded in a gap the page states or a result it shows.
        against Higgs 0.89 / 0.95), and clips have many more pauses than real speech.
      - **Item 5's generator benchmark ends here, as pre-registered: no generator passed the gate, so no Step B (no
        E2Gx ASR arms).** Higgs stays the synthetic generator.
+   - **G3 (VoxCPM2 + per-voice LoRA, README amendment 4, reopened by the user's "Yes, gate VoxCPM2") 2026-11-04: FAIL
+     on s1 and s2** (`results/gen_gate/g3_gate_report.md`).
+     - Closer to real than Higgs on no metric. Speech is near-perfectly intelligible (zs_wer 0.02 vs real 0.91 / 0.27)
+       and too fast (0.50 sec/word vs about 0.87), with a weak voice match (spk_sim 0.63).
+     - Keep rate 0.12-0.16, almost all rejected by the duration filter.
+     - **Per amendment 4 the generator benchmark is now closed with no further reopening.** F5-TTS stays unrun.
 6. **Diffusion- and GAN-based audio generation (user idea 2026-09-28).** Look beyond Higgs's LLM-style (discrete-token)
    generation: diffusion or flow-matching TTS and GAN vocoders, or voice conversion of healthy speech into the patient's
    voice. Either use one as a generator in item 5's benchmark, or bring a useful technique into Higgs (e.g. a

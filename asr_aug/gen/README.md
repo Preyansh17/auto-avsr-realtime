@@ -234,6 +234,24 @@ Per generator and patient, generate the **full** pool plan (the same rows Higgs 
        G1d), and F5-TTS and VoxCPM2 stay unrun, as the "Why" section requires.
    - **Licences.** IndexTTS-1.5 is under the bilibili licence already approved. Seed-VC is GPL-3.0: we only run it and
      do not redistribute it.
+4. **2026-11-04, user decision "Yes, gate VoxCPM2", after G2 failed: the benchmark reopens for one generator, G3.**
+   This overrides amendment 3's stop rule for this one arm only; F5-TTS stays unrun. Written before any VoxCPM2 run.
+   - **G3 = VoxCPM2 (openbmb/VoxCPM2, 2B, Apache-2.0) + per-voice LoRA**, the G1 setup with a different base: one LoRA
+     per Higgs voice (old, s1, s2), trained on the same tts_train clips (`g1/<v>/manifest.tsv`), regenerating the same
+     plan rows (`g1/<v>/plan.json`, 1,998 per voice) into `root/g3/<rel>`.
+   - Training: the repo's `scripts/train_voxcpm_finetune.py` with its LoRA example config
+     (`conf/voxcpm_v2/voxcpm_finetune_lora.yaml`: r 32, alpha 32, LM + DiT LoRA, lr 1e-4 cosine, weight decay 0.01,
+     batch 2 x accum 8). Its 100 warmup steps exceed our runs, so warmup is 10% of the steps (6 / 5 / 5). Length fixed in advance at 3 epochs (the docs' 1-3 for one
+     speaker): ceil(3 x n / 16) steps = 54 (old, 283 clips), 41 (s1, 216), 41 (s2, 216). The final step is used, as
+     with G1's final epoch. 40% of rows get a `ref_audio` (another clip of the same speaker, seeded), as the guide
+     recommends. Transcripts get a capital first letter (the docs want sentence case); audio is used as is.
+   - Generation: text only, the LoRA carries the voice (the docs' LoRA usage; G1/Higgs took a reference clip instead).
+     Repo defaults: cfg 2.0, 10 timesteps, retry_badcase on (3 tries, ratio 6.0), no normalisation, no denoiser;
+     torch.compile off (`optimize=False`), which changes speed, not the model.
+     Seeded per row from md5(rel). Written at the model's 48 kHz.
+   - Gate: unchanged Step A rule via `gate_g1.py` with `GEN=g3`; s1 decides. If G3 passes, Step B runs as written
+     (E2G3 - E2 on s1_oov, 5 seeds). **If G3 fails, the generator benchmark ends with no further reopening.**
+   - Code: `prep_g3.py` (manifests), `g3.sbatch` (train + generate per voice, NW=4 generation workers), `gen_g3.py`.
 
 ## Results
 - **2026-11-01, G1 gate: s1 FAIL, s2 FAIL, so G1 does not go to Step B.** Job 21610585 (`gate_g1.sbatch`, 39 min);
@@ -282,3 +300,24 @@ Per generator and patient, generate the **full** pool plan (the same rows Higgs 
   - Reading: the pathology prefix with GRL gives clean, intelligible speech in roughly the right voice family, but it
     does not carry s1's severity (zs_wer 0.52 against 0.91 real) and loses the per-speaker voice match that
     Higgs's speaker adapter has (spk_sim 0.68 / 0.82). Pooled class prototypes trade speaker identity for control.
+- **2026-11-04, G3 gate (amendment 4): s1 FAIL, s2 FAIL, so G3 does not go to Step B. Per amendment 4 the item 5
+  generator benchmark ends with no further reopening.** Gate job 21911167 (7 min for score/diag/report, pr_60_general
+  race winner; the judge decodes came from failed job 21908948); report in `results/gen_gate/g3_gate_report.md`.
+  - Pipeline: LoRA training + generation 21883426 (old), 21883427 (s1), 21883430 (s2), 16-21 min each including the
+    3-epoch LoRA (54 / 41 / 41 steps); s2 regeneration 21907246 (7 min).
+  - Two code fixes, neither touching a pre-registered setting:
+    - `gen_g3.py` filtered existing clips before sharding. Workers start at different times, so the shards shifted and
+      499 s2 rows were never generated. It now shards first; the missing rows were then generated with the same seeds.
+    - `gate_g1.py score` read `judge_*.tsv` with default csv quoting. Some G3 hypotheses open with a quote mark
+      (`"I want to go...`), which made the reader run across lines. It now uses `QUOTE_NONE`. Every line has exactly 3
+      tab-separated fields; G1, G1d and G2 had no field opening with a quote, so their parses are unchanged.
+  - Keep rate is the worst of any generator: old 0.157, s1 0.146, s2 0.116 (Higgs 0.770 / 0.383 / 0.876). Nearly every
+    rejection is the duration filter (818-888 per voice and pool); judge rejections are 1-11.
+  - On the kept clips G3 is closer to real than Higgs on no metric for either patient:
+    - s1: zs_wer 0.024 vs real 0.909 (Higgs 0.916); sec/word 0.497 vs real 0.865 (Higgs 0.916); spk_sim 0.629 (Higgs 0.890).
+    - s2: zs_wer 0.017 vs real 0.269 (Higgs 0.398); sec/word 0.508 vs real 0.883 (Higgs 0.891); spk_sim 0.623 (Higgs 0.953).
+  - Pause fraction is 0.163 for both (real 0.007 / 0.006).
+  - Reading: a 3-epoch LoRA on about 200-280 Higgs clips does not move VoxCPM2 off its fluent prior. The speech stays
+    near-perfectly intelligible and too fast, so most clips fail the duration filter. The kept clips are the ones padded
+    with pauses, and they do not match the voice (spk_sim about 0.63). The smoke run already showed the fast rate
+    (median 0.32 sec/word); settings were not changed after it, as pre-registered.
