@@ -394,6 +394,41 @@ Each one is grounded in a gap the page states or a result it shows.
            failure is boosted phrases replacing correct words, mostly on the closed-set test30.
        Best per lag after Step 5: 160 ms and 1.12 s = S6; 560 ms = S6 on conv34 / N2r soup on test_open38;
          offline = U3h soup. PB closed.
+     - **Step 6 = N3 pre-registration (2026-11-04, user: "continue"; no N3 result read).** Question: does Tianyu's
+       exact phone recipe, run in-pipeline, reproduce his 160 ms numbers, and do its seeds add to the S6 soup?
+       His recipe (package recipe/train_and_average_commands.txt), run with his own code (code commit 0ded70e,
+       unpacked to /scratch/pa2753/n3, vendor nemotron_finetune d114687), unchanged except paths:
+         experiment sc_o189 (train = s2ov_train 189 real, val = s2ov_val 25), + his 5,378 Higgs rows (taken from the
+         package train.csv, since his ovfilt manifests are unreadable to us), batch 2 x accum 2, lr 1e-5 cosine,
+         200 warmup, wd 1e-3, 11 epochs, att-context probs 0.25 x 4, lowercase SPM targets, no speed perturb, no
+         frozen BN, seeds 7 / 1 / 42, nemo_asr env (NeMo 2.7.3, his version). All 3 seeds on one GPU at once (HPC
+         cancels low-util jobs; batch 2 alone ran at 46% on unified). Then a uniform soup = N3 soup.
+       Score: tianyu_eval.py, offline + cache70_1 / 70_6 / 70_13, soup and seeds.
+       Reads (descriptive, one soup each):
+         (a) pipeline check: N3 soup cache70_1 vs his 1.78 / 1.32 / 8.13 / 9.05. Within ~2 words per set = reproduced.
+         (b) recipe effect: N3 soup vs N2h soup (same synthetic rows; N2h adds s2_train, val 55, our recipe).
+         (c) S9 = uniform soup of N2r 1-3 + N2h 1-3 + N3 1-3, vs S6, per lag. Caveat: N3 trains lowercase targets,
+           N2 cased; the scorer lowercases, but mixing targets in one soup may hurt, which (c) shows.
+       **Step 6 result (2026-11-04, jobs n3 21879369 / n3_score 21882627), test30 / oov50 / test_open38 / conv34:**
+         n3 was preempted 4 times; all 3 seeds resumed from last.ckpt and reached max_epochs=11 (15,312 steps).
+         N3 soup offline 2.37 / 0.88 / 6.50 / 8.60; cache70_1 (160 ms) 1.78 / 1.32 / 8.54 / 7.24; cache70_6 (560 ms)
+           1.78 / 0.88 / 8.54 / 8.60; cache70_13 = offline. Seeds at 160 ms: test_open38 7.32 / 8.94 / 8.94,
+           conv34 7.24 / 7.24 / 9.95 (seeds 1 / 42 / 7).
+         S9 offline 1.18 / 1.32 / 8.94 / 9.05; 160 ms 0.59 / 1.75 / 6.91 / 6.33; 560 ms 0.59 / 0.44 / 7.32 / 4.52;
+           cache70_13 = offline.
+         (a) Reproduced. N3 soup 160 ms vs his 1.78 / 1.32 / 8.13 / 9.05: test30 and oov50 equal, test_open38 +1 word,
+           conv34 4 words better (outside ~2 words, but in our favour). Our pipeline does not lose his result.
+         (b) Recipe effect, N3 soup vs N2h soup: at 160 ms N3 is better on oov50 / test_open38 / conv34
+           (-0.87 / -1.62 / -2.71) and 2 words worse on test30 (N3 has no s2_train). Offline N3 is worse on all four
+           (+1.78 / 0 / +0.81 / +2.27). Val25 agrees at 160 ms (9.62 vs 12.82). His recipe suits low lag better; ours
+           suits offline.
+         (c) S9 does not beat S6. Val25 (picks the model, not test): S9 worse at every lag (offline 9.62 vs 8.33,
+           160 ms 13.46 vs 8.33, 560 ms 8.97 vs 6.41, 1.12 s 9.62 vs 8.33). On test, mixed: 560 ms better (oov50 -0.88,
+           test_open38 -2.03, conv34 tie); offline and 1.12 s much worse (test_open38 +3.25, conv34 +4.07), worse than
+           every component soup. That fits the cased / lowercase target-mixing caveat. S9 closed.
+         Tianyu's built-in eval (his code, raw text, no normalization) gives s2ov_test 11.0-12.7 per seed; it is not
+           comparable to tianyu_eval.py (normalized), which scored every number in this plan.
+       Best per lag after Step 6 (picked by val25): unchanged. 160 ms / 560 ms / 1.12 s = S6; offline = U3h soup.
 1. **DONE 2026-10-28, null (3.6).** **Contextual biasing / LM fusion for unseen words (decode-only, ~4 GPU-h).** The page says errors are
    very consistent across Whisper variants (so more ensembling has a ceiling) and lists "personalised phrase completion" as
    future work. Not in Tianyu's ablations. Apply to Tianyu-style best checkpoints we reproduce (encoder-only + old data):
