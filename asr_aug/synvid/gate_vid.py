@@ -61,13 +61,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gens", nargs="+", required=True)
     ap.add_argument("--pilot", default=f"{SV}/pilot/pilot.jsonl")
+    ap.add_argument("--root", default=f"{SV}/pilot", help="candidate dirs live in <root>/<gen>; a <root>/<gen>/rows.jsonl "
+                    "(Phase 3b arms) replaces --pilot for that candidate")
     ap.add_argument("--real-judge", default=f"{SV}/p1/judge_huge_s3ov_train.jsonl")
     ap.add_argument("--real-crops", default=f"{SV}/p1/crop240/crops")
     ap.add_argument("--real-lip", default=f"{SV}/p1/lip_activity_s3_train.json")
     ap.add_argument("--thr", default=f"{SV}/p1/thr.json")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
-    pilot = jl(a.pilot)
+    pilot0 = jl(a.pilot)
     rj = jl(a.real_judge)
     real_wer = float(np.mean([r["wer_cap1"] for r in rj]))
     real_zero = float(np.mean([r["wer"] == 0 for r in rj]))
@@ -75,7 +77,8 @@ def main():
     real_sharp = float(np.median([x for x in (lapvar(p) for p in sorted(glob.glob(a.real_crops + "/*.mp4"))) if x]))
     res = {}
     for g in a.gens:
-        d = f"{SV}/pilot/{g}"
+        d = f"{a.root}/{g}"
+        pilot = jl(f"{d}/rows.jsonl") or pilot0
         logs = {r["take_id"]: r for f in glob.glob(f"{d}/crop/crop_log_*.jsonl") for r in jl(f)}
         jd = {r["take_id"]: r for r in jl(f"{d}/judge.jsonl")}
         ok = [p["pid"] for p in pilot if p["pid"] in logs and logs[p["pid"]]["ok"]
@@ -100,6 +103,16 @@ def main():
                  sharpness_ratio=(float(np.median(sharp)) / real_sharp) if sharp else 0.0,
                  too_easy=float(np.mean([jd[k]["wer"] == 0 for k in jd])) if jd else None, n_judged=len(jd),
                  gpu_sec_per_clip=gen_sec, peak_mib=max((x.get("peak_mib", 0) for x in gl), default=None))
+        split = {}
+        for name, want in (("looped", True), ("not_looped", False)):
+            ps = [p for p in pilot if p.get("pingpong") == want]
+            js = [p for p in ps if p["pid"] in jd]
+            split[name] = dict(
+                n=len(ps),
+                readability=float(np.mean([jd[p["pid"]]["wer_cap1"] if p["pid"] in jd else 1.0 for p in ps])) if ps else None,
+                template_leak=float(np.mean([wer(p["template_text"], jd[p["pid"]]["hyp"]) < wer(p["text"], jd[p["pid"]]["hyp"])
+                                             for p in js])) if js else None)
+        r["descriptive_loop_split"] = split
         r["pass"] = dict(crop=r["crop_success"] >= 0.98, readability=r["readability"] <= real_wer + 0.15,
                          leak=r["template_leak"] <= 0.05, rate=abs(r["rate_ratio"] - 1) <= 0.15,
                          sharpness=r["sharpness_ratio"] >= 0.7)
@@ -110,7 +123,7 @@ def main():
     json.dump(dict(real=dict(s3ov_train_wer_cap1=real_wer, s3ov_train_wer0=real_zero, s3_train_active_spw=real_spw,
                              s3_train_sharpness=real_sharp), gens=res, chosen=passing[0] if passing else None),
               open(a.out.replace(".md", ".json"), "w"), indent=1)
-    L = ["# Generator gate, part 1 (pilot: 100 sentences x 100 s3_train templates)", "",
+    L = [f"# Generator gate, part 1 ({a.root})", "",
          f"Real references: s3ov_train judge WER (capped) {real_wer:.3f}, WER-0 share {real_zero:.2f}; "
          f"s3_train active sec/word {real_spw:.3f}; s3_train crop sharpness {real_sharp:.1f}.", "",
          "| candidate | crop success (>=0.98) | readability WER (<= %.3f) | template leak (<=0.05) | rate ratio (0.85-1.15) "
@@ -123,6 +136,14 @@ def main():
                  f"{r['sharpness_ratio']:.2f}{m('sharpness')} | {r['too_easy'] if r['too_easy'] is None else round(r['too_easy'], 2)} | "
                  f"{r['gpu_sec_per_clip'] if r['gpu_sec_per_clip'] is None else round(r['gpu_sec_per_clip'], 1)} | "
                  f"{'PASS' if r['passes_all'] else 'FAIL'} |")
+    L += ["", "Descriptive only (no rule): looped (template shorter than the driving clip) vs not-looped pilot clips.", "",
+          "| candidate | looped n | looped readability | looped leak | not-looped n | not-looped readability | not-looped leak |",
+          "|---|---|---|---|---|---|---|"]
+    f3 = lambda v: "-" if v is None else f"{v:.3f}"
+    for g, r in res.items():
+        a_, b_ = r["descriptive_loop_split"]["looped"], r["descriptive_loop_split"]["not_looped"]
+        L.append(f"| {g} | {a_['n']} | {f3(a_['readability'])} | {f3(a_['template_leak'])} | {b_['n']} | "
+                 f"{f3(b_['readability'])} | {f3(b_['template_leak'])} |")
     L += ["", f"Chosen: {passing[0] if passing else 'none passes'}"]
     open(a.out, "w").write("\n".join(L) + "\n")
     print("\n".join(L))

@@ -159,6 +159,14 @@ together, fine-tune included, heading over about 20 GPU-hours.
 - A8 Power note: OOV50 has 228 words, so 4.24% is about 10 word errors. Primaries unchanged.
 - A9 Third gate candidate G-LSft (section 5.1); the pilot is 100 sentences x 3 candidates with the same driving audio
   and templates; gate rules unchanged; Phases 2 and 3 together, fine-tune included, stay under about 20 GPU-hours.
+- A10 Phase 3b (2026-11-07, after D2 failed for all three candidates; descriptive diagnostics, D2 unchanged). G-LSft
+  checkpoint-3000 on the D2 pilot templates, scored with the frozen gate table plus the v1.8 lip model as a second,
+  descriptive judge; about 3 GPU-hours; stop and report if every arm stays above 0.6 judge WER.
+  3b.1 audio rate: (a) normal-rate Higgs speech span, same lead-in/tail as D2; (b) the same normal-rate words with
+  equal silence inserted at the gap midpoints so the clip length equals the 1.47x stretched D2 clip. Both against
+  D2 G-LSft (0.839). Word timings are the audio CTC timings drive_final.py already used for the speech span.
+  3b.2 own sentence: each template driven by Higgs TTS of its own transcript retimed onto the clip's word timings
+  (the A9 G-LSft training pairs, 90 of the 100 templates have one); readability, rate, sharpness; leak undefined.
 
 ## 11. Files
 | file | step |
@@ -170,4 +178,5 @@ together, fine-tune included, heading over about 20 GPU-hours.
 | `make_drive.py`, `drive_final.py`, `drive.sbatch` | 2.2 / 2.3 driving audio |
 | `align_words.py`, `glsft_prep.sbatch`, `glsft_train.sbatch` | G-LSft training pairs and fine-tune |
 | `pilot.py`, `pilot_gen.sbatch`, `gate_vid.py` | Phase 3 pilot and gate |
+| `phase3b_audio.py`, `phase3b_arm.sbatch` | Phase 3b arms (A10); `gate_vid.py --root .../phase3b` scores them |
 | `build_env_*.sbatch`, `fetch_text.sbatch`, `p1_gpu_*.sbatch`, `SUBMIT.md` | cluster setup and Phase 1 jobs |

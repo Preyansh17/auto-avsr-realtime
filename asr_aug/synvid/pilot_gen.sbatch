@@ -37,8 +37,13 @@ for l in open("$R"):
     if not os.path.exists(sq):
         lm = np.load(f"$SV/p1/crop240/landmarks/{r['template_tid']}.npy")
         x0 = int(min(max(np.nanmedian(lm[:, :, 0]) - 540, 0), 1920 - 1080))
-        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", r["template_path"], "-an", "-vf",
-                        f"crop=1080:1080:{x0}:0", "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", sq], check=True)
+        vf, extra = f"crop=1080:1080:{x0}:0", []
+        if r["pingpong"]:  # KeySync does not loop a short template (output stops at its end): ping-pong it here,
+            tf = int(r["template_frames"])  # as plan step 3.2.5 says, to the driving clip's length
+            vf += f",split[a][b];[b]reverse[r];[a][r]concat=n=2:v=1:a=0,loop=loop=-1:size={2 * tf}"
+            extra = ["-frames:v", str(int(np.ceil(r["drive_sec"] * 25)) + 2)]
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", r["template_path"], "-an", "-vf", vf, *extra,
+                        "-c:v", "libx264", "-crf", "12", "-pix_fmt", "yuv420p", sq], check=True)
     if not os.path.lexists(f"$K/audios/{p}.wav"):
         os.symlink(r["drive_wav"], f"$K/audios/{p}.wav")
     open("$K/videos.txt", "a").write(f"$K/videos/{p}.mp4\n")

@@ -23,6 +23,8 @@ git -C $C log -1 --format="LatentSync %H"
 P=$E/bin/python
 cd $C
 $P -m pip install -q -r requirements.txt
+# librosa (used by the training data loader) imports pkg_resources, which newer setuptools no longer ships
+$P -m pip install -q "setuptools<70"
 mkdir -p $M
 $E/bin/huggingface-cli download ByteDance/LatentSync-1.6 whisper/tiny.pt latentsync_unet.pt --revision $REV --local-dir $M
 ln -sfn $M $C/checkpoints

@@ -38,6 +38,7 @@ def main():
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    a.out_dir = os.path.abspath(a.out_dir)  # paths in drive.json must work from any cwd
     os.makedirs(a.out_dir, exist_ok=True)
     wh = [json.loads(l) for l in open(a.whisper) if l.strip()]
     al = {json.loads(l)["id"]: json.loads(l) for l in open(a.align) if l.strip()}
