@@ -167,6 +167,33 @@ together, fine-tune included, heading over about 20 GPU-hours.
   D2 G-LSft (0.839). Word timings are the audio CTC timings drive_final.py already used for the speech span.
   3b.2 own sentence: each template driven by Higgs TTS of its own transcript retimed onto the clip's word timings
   (the A9 G-LSft training pairs, 90 of the 100 templates have one); readability, rate, sharpness; leak undefined.
+- A11 Text-to-mouth step 1, splice test (2026-11-09, Preyansh; plan_semg3_text_to_mouth.md). Gate G3 is frozen here
+  before any clip is built or scored. CPU unit selection from real s3_train 96x96 mouth crops (no generator):
+  - Source: the 240 s3_train crops of step 1.4 minus 24 held-out clips (random.Random(20261110).sample of the take_ids
+    sorted; listed in t2m/heldout.txt). No val, test, oov, s3ov_test or rainbow clip is read.
+  - Word spans: the A9 video CTC word positions (glsft/video_align.jsonl, one peak frame per word) cut at the midpoints
+    between consecutive peaks; the first word starts at the lip-activity span start, the last ends at its end (step 1.4,
+    frozen threshold). The D2 audio CTC timings are on TTS audio, not on semg3 clips, so they cannot place real words.
+  - Phones: CMUdict first pronunciation, spread inside each word in proportion to a fixed average phone duration table.
+  - Units: whole-word segments; diphones (phone midpoint to next phone midpoint, the first/last diphone of a word
+    extended to the word edge) for words not in the inventory; 6-frame real closed-mouth windows (lead-in/tail frames
+    outside the lip-activity span) at start and end.
+  - Selection: Viterbi over candidates (at most 30 per slot, fixed seed). Target cost: whole word 0, exact-phone
+    diphone 0.5, viseme-class diphone 1, fallback 2. Join cost at the boundary frames: mean abs gray difference (48x48,
+    /255) + |aperture difference| x 5 + |mean brightness difference| / 255 x 2. Joins cross-fade 2 frames (1 inside a
+    diphone word).
+  - Sets: (a) the 24 held-out sentences (their own clips excluded); (b) the 100 D2 pilot sentences. In-vocabulary word
+    rate reported per set.
+  Gate G3, applied to set (b); set (a) gets the same table:
+  - crop validity >= 0.98: clip built, every word realised, every frame 96x96 decodable;
+  - readability: mean capped WER of the zero-shot USR 2.0 Huge judge (step 1.2 settings) <= 0.372;
+  - sharpness: median Laplacian variance / median over the real s3_train crops >= 0.7 (gate_vid.py rule);
+  - patient likeness: per clip, aperture range (p95 - p5), opening/closing speed (p95 of the smoothed aperture
+    velocity x 25) and active sec/word (lip_activity.py rule) from the carried FAN aperture; the synthetic median of each
+    must lie inside the real s3_train per-clip p10..p90.
+  - Descriptive only: v1.8 lip model WER (cluster only), real held-out crops as its calibration; D2 G-LSft on the same
+    100 sentences (Huge 0.839, v1.8 0.863) as the comparison.
+  Stop rule: set (a) readability > 0.6 -> stop and report.
 
 ## 11. Files
 | file | step |
@@ -178,5 +205,6 @@ together, fine-tune included, heading over about 20 GPU-hours.
 | `make_drive.py`, `drive_final.py`, `drive.sbatch` | 2.2 / 2.3 driving audio |
 | `align_words.py`, `glsft_prep.sbatch`, `glsft_train.sbatch` | G-LSft training pairs and fine-tune |
 | `pilot.py`, `pilot_gen.sbatch`, `gate_vid.py` | Phase 3 pilot and gate |
+| `t2m_build.py`, `t2m_build.sbatch`, `t2m_judge.sbatch`, `t2m_gate.py` | A11 text-to-mouth step 1 |
 | `phase3b_audio.py`, `phase3b_arm.sbatch` | Phase 3b arms (A10); `gate_vid.py --root .../phase3b` scores them |
 | `build_env_*.sbatch`, `fetch_text.sbatch`, `p1_gpu_*.sbatch`, `SUBMIT.md` | cluster setup and Phase 1 jobs |
