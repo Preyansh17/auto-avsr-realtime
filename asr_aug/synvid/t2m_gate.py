@@ -17,7 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gate_vid import lapvar  # noqa: E402
 from lip_activity import aperture, velocity, span  # noqa: E402
 
-SV = "/scratch/pa2753/synvid"; T = f"{SV}/t2m"
+SV = "/scratch/pa2753/synvid"
+T = sys.argv[1] if len(sys.argv) > 1 else f"{SV}/t2m"  # step 1: t2m; step 1b (A12): t2m/step1b
 
 
 def jl(p):
@@ -56,11 +57,17 @@ def main():
                 float(np.percentile([r[k] for r in real if r[k] is not None], 90))) for k in ("range", "speed", "spw")}
     real_sharp = float(np.median([x for x in (lapvar(p) for p in sorted(glob.glob(f"{SV}/p1/crop240/crops/*.mp4"))) if x]))
     v18 = json.load(open(f"{T}/v18_scores.json")) if os.path.exists(f"{T}/v18_scores.json") else {}
-    held = open(f"{T}/heldout.txt").read().split()
+    real_dirs = {"a_real": (f"{T}/heldout.txt", f"{SV}/p1/crop240")}
+    if os.path.exists(f"{T}/heldout_s3ov.txt"):  # A12 set c and its real clips
+        real_dirs["c_real"] = (f"{T}/heldout_s3ov.txt", f"{T}/ov/crop")
+        lip.update({c["take_id"]: c for c in json.load(open(f"{T}/ov/lip_s3ov_train.json"))["per_clip"]})
+    names = [n for n in ("a", "b", "c") if os.path.exists(f"{T}/{n}/rows.jsonl")] + list(real_dirs)
     res = {}
-    for name in ("a", "b", "a_real"):
-        if name == "a_real":
-            rows = [dict(sid="a_" + t, path=f"{SV}/p1/crop240/crops/{t}.mp4", valid=True, src=t) for t in held]
+    for name in names:
+        if name in real_dirs:
+            hf, cd = real_dirs[name]
+            rows = [dict(sid=name[0] + "_" + t, path=f"{cd}/crops/{t}.mp4", valid=True, src=t, lmdir=f"{cd}/landmarks")
+                    for t in open(hf).read().split()]
         else:
             rows = jl(f"{T}/{name}/rows.jsonl")
         jd = {r["take_id"]: r for r in jl(f"{T}/judge_{name}.jsonl")}
@@ -70,8 +77,8 @@ def main():
         sharp = [x for x in (lapvar(r["path"]) for r in ok) if x]
         st = []
         for r in ok:
-            if name == "a_real":
-                a = aperture(np.load(f"{SV}/p1/crop240/landmarks/{r['src']}.npy")); w = lip.get(r["src"], {}).get("words")
+            if name in real_dirs:
+                a = aperture(np.load(f"{r['lmdir']}/{r['src']}.npy")); w = lip.get(r["src"], {}).get("words")
             else:
                 a = np.load(f"{T}/{name}/ap/{r['sid']}.npy"); w = r["words"]
             if a is not None and w:
@@ -82,14 +89,15 @@ def main():
                   wer0=float(np.mean([jd[k]["wer"] == 0 for k in jd])) if jd else None,
                   sharpness_ratio=float(np.median(sharp)) / real_sharp if sharp else 0.0, likeness=med,
                   in_vocab_word_rate=(sum(r.get("in_vocab", 0) for r in rows) / max(1, sum(r.get("words", 0) for r in rows)))
-                  if name != "a_real" else None, v18=v18.get(name))
+                  if name not in real_dirs else None, v18=v18.get(name))
         r_["pass"] = dict(validity=r_["validity"] >= 0.98, readability=r_["readability"] is not None and r_["readability"] <= 0.372,
                           sharpness=r_["sharpness_ratio"] >= 0.7,
                           likeness=all(med[k] is not None and band[k][0] <= med[k] <= band[k][1] for k in band))
         r_["passes_all"] = all(r_["pass"].values())
         res[name] = r_
     out = dict(real_band_p10_p90=band, real_sharpness=real_sharp, sets=res,
-               g3=("PASS" if res["b"]["passes_all"] else "FAIL"), stop_rule_a_gt_0_6=res["a"]["readability"] > 0.6)
+               g3=("PASS" if res["b"]["passes_all"] else "FAIL"), stop_rule_a_gt_0_6=res["a"]["readability"] > 0.6,
+               stop_rule_b_or_c_gt_0_6=any(res[n]["readability"] > 0.6 for n in ("b", "c") if n in res))
     json.dump(out, open(f"{T}/gate_g3.json", "w"), indent=1)
     f = lambda x, d=3: "-" if x is None else f"{x:.{d}f}"
     L = ["# Gate G3, text-to-mouth step 1 (README A11)", "",
@@ -103,7 +111,8 @@ def main():
                  f"{f(r['wer0'], 2)} | {f(r['sharpness_ratio'], 2)} | {f(r['likeness']['range'])} | {f(r['likeness']['speed'], 2)} | "
                  f"{f(r['likeness']['spw'])} | {'ok' if r['pass']['likeness'] else 'out'} | "
                  f"{f(v.get('pooled_wer'), 1)} / {f(v.get('capmean'))} | {'PASS' if r['passes_all'] else 'FAIL'} |")
-    L += ["", f"G3 (set b): {out['g3']}. Stop rule (set a readability > 0.6): {'fires' if out['stop_rule_a_gt_0_6'] else 'does not fire'}.",
+    L += ["", f"G3 (set b): {out['g3']}. Stop rule (set a readability > 0.6): {'fires' if out['stop_rule_a_gt_0_6'] else 'does not fire'}."
+          + (f" A12 stop rule (set b or c > 0.6): {'fires' if out['stop_rule_b_or_c_gt_0_6'] else 'does not fire'}." if "c" in res else ""),
           "D2 G-LSft on the same 100 sentences: Huge 0.839, v1.8 93.59% / 0.863."]
     open(f"{T}/gate_g3.md", "w").write("\n".join(L) + "\n")
     print("\n".join(L))

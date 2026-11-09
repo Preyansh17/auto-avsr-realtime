@@ -208,47 +208,61 @@ def write_mp4(frames, path):
     os.replace(path + ".tmp.mp4", path)
 
 
-def main():
-    ap_ = argparse.ArgumentParser()
-    ap_.add_argument("--out", default=f"{SV}/t2m")
-    ap_.add_argument("--cmudict", default="/home/pa2753/nltk_data/corpora/cmudict/cmudict")
-    a = ap_.parse_args()
-    rows = [json.loads(l) for l in open(f"{ROLES}/s3_train.jsonl") if l.strip()]
+def load_role(role, nheld, seed, crop_dir, align_path, lip_path):
+    rows = [json.loads(l) for l in open(f"{ROLES}/{role}.jsonl") if l.strip()]
     for r in rows:
         r.setdefault("take_id", os.path.basename(r["video_path"])[:-4])
-    tids = sorted(r["take_id"] for r in rows)
-    held = set(random.Random(20261110).sample(tids, 24))
-    os.makedirs(a.out, exist_ok=True)
-    open(f"{a.out}/heldout.txt", "w").write("\n".join(sorted(held)) + "\n")
-    cmu = load_cmu(a.cmudict)
+    held = set(random.Random(seed).sample(sorted(r["take_id"] for r in rows), nheld))
     align = {}
-    for l in open(f"{SV}/glsft/video_align.jsonl"):
+    for l in open(align_path):
         x = json.loads(l)
         if x.get("words"):
             align[x["take_id"]] = x
-    lip = {c["take_id"]: c for c in json.load(open(f"{SV}/p1/lip_activity_s3_train.json"))["per_clip"] if c.get("start") is not None}
+    lip = {c["take_id"]: c for c in json.load(open(lip_path))["per_clip"] if c.get("start") is not None}
     clips = {}
     for r in rows:
         t = r["take_id"]
-        if t in held:
+        if t in held or not os.path.exists(f"{crop_dir}/crops/{t}.mp4"):
             continue
-        f = read_frames(f"{SV}/p1/crop240/crops/{t}.mp4")
-        lm = np.load(f"{SV}/p1/crop240/landmarks/{t}.npy")
-        apx = aperture(lm) if f is not None else None
+        f = read_frames(f"{crop_dir}/crops/{t}.mp4")
+        apx = aperture(np.load(f"{crop_dir}/landmarks/{t}.npy")) if f is not None else None
         if f is None or apx is None:
             continue
         n = min(len(f), len(apx))
         clips[t] = Clip(t, f[:n], apx[:n])
-    inv = build_inventory(rows, clips, align, lip, cmu, held)
-    rep = dict(heldout=len(held), clips_loaded=len(clips), inventory_clips=inv["used"], skipped=inv["skipped"],
-               vocab=len(inv["words"]), diphone_types=len(inv["di"]), rest_windows=len(inv["rest"]))
+    return rows, held, align, lip, clips
+
+
+def main():
+    ap_ = argparse.ArgumentParser()
+    ap_.add_argument("--out", default=f"{SV}/t2m")
+    ap_.add_argument("--cmudict", default="/home/pa2753/nltk_data/corpora/cmudict/cmudict")
+    ap_.add_argument("--with-ov", default=None, help="A12: dir with s3ov_train crop/ (crops, landmarks), "
+                     "video_align_s3ov_train.jsonl and lip_s3ov_train.json; adds s3ov_train minus 26 held out and set c")
+    a = ap_.parse_args()
+    os.makedirs(a.out, exist_ok=True)
+    cmu = load_cmu(a.cmudict)
+    rows, held, align, lip, clips = load_role("s3_train", 24, 20261110, f"{SV}/p1/crop240", f"{SV}/glsft/video_align.jsonl",
+                                              f"{SV}/p1/lip_activity_s3_train.json")
+    open(f"{a.out}/heldout.txt", "w").write("\n".join(sorted(held)) + "\n")
+    rows_all, held_all = list(rows), set(held)
     sets = dict(a=[dict(sid="a_" + r["take_id"], text=r["transcript"], src=r["take_id"]) for r in rows if r["take_id"] in held],
-                b=[dict(sid=p["pid"], text=p["text"]) for p in map(json.loads, open(f"{SV}/pilot/pilot.jsonl")) ])
-    train_sents = {norm(r["transcript"]) for r in rows if r["take_id"] not in held}
+                b=[dict(sid=p["pid"], text=p["text"]) for p in map(json.loads, open(f"{SV}/pilot/pilot.jsonl"))])
+    if a.with_ov:
+        o = a.with_ov
+        r2, h2, al2, lp2, c2 = load_role("s3ov_train", 26, 20261112, f"{o}/crop", f"{o}/video_align_s3ov_train.jsonl",
+                                         f"{o}/lip_s3ov_train.json")
+        open(f"{a.out}/heldout_s3ov.txt", "w").write("\n".join(sorted(h2)) + "\n")
+        rows_all += r2; held_all |= h2; align.update(al2); lip.update(lp2); clips.update(c2)
+        sets["c"] = [dict(sid="c_" + r["take_id"], text=r["transcript"], src=r["take_id"]) for r in r2 if r["take_id"] in h2]
+    inv = build_inventory(rows_all, clips, align, lip, cmu, held_all)
+    rep = dict(heldout=len(held_all), clips_loaded=len(clips), inventory_clips=inv["used"], skipped=inv["skipped"],
+               vocab=len(inv["words"]), diphone_types=len(inv["di"]), rest_windows=len(inv["rest"]))
+    train_sents = {norm(r["transcript"]) for r in rows_all if r["take_id"] not in held_all}
     for name, items in sets.items():
         d = f"{a.out}/{name}"
         os.makedirs(f"{d}/clips", exist_ok=True); os.makedirs(f"{d}/ap", exist_ok=True)
-        nw = niv = 0
+        nw = niv = nb = 0
         with open(f"{d}/rows.jsonl", "w") as fo:
             for i, it in enumerate(items):
                 res, info = synth(it["text"], inv, clips, cmu, seed=20261111 + i)
@@ -263,8 +277,9 @@ def main():
                     p = f"{d}/clips/{it['sid']}.mp4"
                     write_mp4(fr, p); np.save(f"{d}/ap/{it['sid']}.npy", apc)
                     row.update(valid=not info["unknown"], path=p, frames=int(len(fr)), units=info["units"], cost=info["cost"])
+                    nb += row["valid"]
                 fo.write(json.dumps(row) + "\n")
-        rep[f"set_{name}"] = dict(n=len(items), words=nw, in_vocab_word_rate=niv / max(1, nw),
+        rep[f"set_{name}"] = dict(n=len(items), built_valid=nb, words=nw, in_vocab_word_rate=niv / max(1, nw),
                                   sentence_in_train=sum(norm(x["text"]) in train_sents for x in items))
     json.dump(rep, open(f"{a.out}/build_report.json", "w"), indent=1)
     print(json.dumps(rep, indent=1))

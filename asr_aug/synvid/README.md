@@ -194,6 +194,15 @@ together, fine-tune included, heading over about 20 GPU-hours.
   - Descriptive only: v1.8 lip model WER (cluster only), real held-out crops as its calibration; D2 G-LSft on the same
     100 sentences (Huge 0.839, v1.8 0.863) as the comparison.
   Stop rule: set (a) readability > 0.6 -> stop and report.
+- A12 Text-to-mouth step 1b (2026-11-09, Preyansh): s3ov_train joins the splice inventory, so s3ov_train is no longer a
+  clean real-data control for any later step. Gate G3 is unchanged and stays frozen (A11; the likeness band stays the
+  real s3_train one). Inventory = the same 216 s3_train clips + s3ov_train minus 26 held-out clips
+  (random.Random(20261112).sample of the sorted take_ids, t2m/step1b/heldout_s3ov.txt). s3ov_train crops are made with
+  the step 1.4 crop pipeline, word positions with the same A9 video CTC alignment of each clip's transcript, lip span
+  with the frozen step 1.4 threshold. Sets: (a) the same 24 s3_train held-out sentences, (b) the same 100 D2
+  sentences, (c) the 26 s3ov_train held-out sentences (open vocabulary, real clips available as the reference). Same
+  judges; v1.8 trained on s3ov_train, so its numbers are flagged optimistic. Stop rule: set (b) or (c) Huge
+  readability > 0.6 -> report and recommend closing the synthetic track.
 
 ## 11. Files
 | file | step |
@@ -206,5 +215,6 @@ together, fine-tune included, heading over about 20 GPU-hours.
 | `align_words.py`, `glsft_prep.sbatch`, `glsft_train.sbatch` | G-LSft training pairs and fine-tune |
 | `pilot.py`, `pilot_gen.sbatch`, `gate_vid.py` | Phase 3 pilot and gate |
 | `t2m_build.py`, `t2m_build.sbatch`, `t2m_judge.sbatch`, `t2m_gate.py` | A11 text-to-mouth step 1 |
+| `t2m1b_prep.sbatch`, `t2m_build.py --with-ov`, `t2m_gate.py <dir>` | A12 step 1b |
 | `phase3b_audio.py`, `phase3b_arm.sbatch` | Phase 3b arms (A10); `gate_vid.py --root .../phase3b` scores them |
 | `build_env_*.sbatch`, `fetch_text.sbatch`, `p1_gpu_*.sbatch`, `SUBMIT.md` | cluster setup and Phase 1 jobs |
