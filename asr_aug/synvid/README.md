@@ -203,6 +203,25 @@ together, fine-tune included, heading over about 20 GPU-hours.
   sentences, (c) the 26 s3ov_train held-out sentences (open vocabulary, real clips available as the reference). Same
   judges; v1.8 trained on s3ov_train, so its numbers are flagged optimistic. Stop rule: set (b) or (c) Huge
   readability > 0.6 -> report and recommend closing the synthetic track.
+- A13 Targeted text-to-mouth (2026-11-10, Preyansh; plan_semg3_t2m_targeted.md, untracked). Frozen before step 0.
+  - Design: DualLip-style generator, text -> phonemes -> semg3 duration model -> 96x96 grey devcrop mouth crops in a
+    frozen autoencoder latent, conditioned on one reference frame; losses L1 + perceptual, frozen lip-reader CTC from a
+    reader that is not the judge (Auto-AVSR LRS3 VSR or USR 2.0 Base), smoothness. Target: unseen-word errors of the
+    deployed chain on the 193 in-home clips (81/1116 errors, 24 unseen-word errors of 231 unseen-word tokens).
+  - Data rules (sec 2): training pool = readable labelled semg3 clips of s3_train (240), s3ov_train (262), v3.4 train
+    (298, Tianyu's split) and real conversation (~116); no clip of s3_val, s3ov_val, s3_test, s3_oov, s3ov_test,
+    v3.4 val/test, rainbow or any in-home clip. 30 held-out reconstruction sentences (fixed seed, spread across
+    sources, t2m2/heldout30.txt) are excluded from generator training. Generation text: public conversational English,
+    3-10 words, exact and normalised leak check against every eval transcript including the 193 in-home ones.
+    /scratch/th3482 read-only; outputs under /scratch/pa2753/synvid/t2m2/; nothing from Tianyu's files leaves torch.
+  - Gate G4 (sec 4), frozen: judge USR 2.0 Huge zero-shot (step 1.2 settings), v1.8 descriptive only.
+    (a) 30 held-out reconstruction sentences: readability <= 0.372; (b) 100 new text-pool sentences: readability
+    <= 0.372 and crop validity >= 0.98; (c) sharpness >= 0.7 of real, patient likeness inside the real spread (A11
+    rules). Stop rule: (a) > 0.6 after the first full generator run -> stop and report.
+  - Training test (sec 5), only if G4 passes and Preyansh says go: F1 recipe, R vs R+S (synthetic <= 50% of real and
+    <= 500 clips), 3 seeds, chain decode. Primary: pooled in-home word errors on the 193 clips with the deployed chain,
+    R+S minus R, seed-paired bootstrap; "helps" = CI upper bound < 0.
+  - Budget: step 0 CPU (plus <= 0.5 GPU-h video-CTC alignment); step 1 8-12 GPU-h; G4 < 1 GPU-h.
 
 ## 11. Files
 | file | step |
