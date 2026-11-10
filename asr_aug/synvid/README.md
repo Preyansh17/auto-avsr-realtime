@@ -235,5 +235,6 @@ together, fine-tune included, heading over about 20 GPU-hours.
 | `pilot.py`, `pilot_gen.sbatch`, `gate_vid.py` | Phase 3 pilot and gate |
 | `t2m_build.py`, `t2m_build.sbatch`, `t2m_judge.sbatch`, `t2m_gate.py` | A11 text-to-mouth step 1 |
 | `t2m1b_prep.sbatch`, `t2m_build.py --with-ov`, `t2m_gate.py <dir>` | A12 step 1b |
+| `t2m2/pool.py`, `t2m2/devcrop.sbatch`, `t2m2/align_npz.py`, `t2m2/align.sbatch`, `t2m2/stats.py`, `t2m2/g2p_check.py`, `t2m2/step0.md` | A13 step 0 |
 | `phase3b_audio.py`, `phase3b_arm.sbatch` | Phase 3b arms (A10); `gate_vid.py --root .../phase3b` scores them |
 | `build_env_*.sbatch`, `fetch_text.sbatch`, `p1_gpu_*.sbatch`, `SUBMIT.md` | cluster setup and Phase 1 jobs |
