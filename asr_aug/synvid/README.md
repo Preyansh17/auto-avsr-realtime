@@ -222,6 +222,92 @@ together, fine-tune included, heading over about 20 GPU-hours.
     <= 500 clips), 3 seeds, chain decode. Primary: pooled in-home word errors on the 193 clips with the deployed chain,
     R+S minus R, seed-paired bootstrap; "helps" = CI upper bound < 0.
   - Budget: step 0 CPU (plus <= 0.5 GPU-h video-CTC alignment); step 1 8-12 GPU-h; G4 < 1 GPU-h.
+- A14 Real-video oracle V0 (2026-11-10, Preyansh: "start with V0. semg3 WER is the goal"; PLAN.md 4.3). Frozen before any V0 training.
+  - Question: does adding REAL video of a word the model never trained on lower errors on that word? If not, no generator can help.
+  - Split (`v0/v0_split.py`, seed 20261114, built once from the 912-clip A13 pool, no eval role read): W = 118 word types
+    (2..6 pool clips, outside the s3 50-word set, no clip in heldout30; list `v0/split/W.txt`); T = 100 test clips
+    (708 tokens, 120 W tokens); S = 169 support clips (211 W tokens); val = 60 clips with no W word, checkpoint selection only.
+    A0 = pool - T - S - val (583 clips), A1 = A0 + S (752 clips). Role sha256 in `/scratch/pa2753/synvid/v0/split/split_report.json`.
+  - Training: Tianyu's snapshot 849ef5f `usr2_ft.py` unchanged, F1 recipe (USR 2.0 Huge HR init, 1,000 updates, accum 4, lr 2e-5,
+    warmup 100, seg longest, eval every 100, all video augs: affine 4,3,0.05, photo, speed 0.85-1.15, trunc 0.3 s), then WiSE alpha 0.75.
+    No source oversampling (F1 used real x4); same in both arms. Seeds 1, 2, 3. Both arms get the same 1,000 updates.
+  - Decode: model alone, beam 10, CTC 0.1, on T.
+  - Primary: errors on W tokens in T (reference W tokens substituted or deleted in the Levenshtein alignment), WiSE 0.75 model,
+    A1 - A0 summed over 3 seeds, paired bootstrap over T clips (4,000 draws). PASS = 95% CI upper < 0. FAIL -> close the
+    synthetic-video track (PLAN.md 3.3 item 2). Descriptive: all-token WER on T, alpha 1.0 model, the 126 T tokens unseen in both arms.
+  - Stop and report at the decision. Budget cap 12 GPU-h.
+
+- A15 V1 text/audio-exposure control (2026-11-10, after V0 PASS -7 [-15, -1]; Preyansh: "continue"). Frozen before any V1 training.
+  Question: is V0's gain from the new words' mouth video, or from the model seeing the new sentences at all? Arm A2 = A0 +
+  the 169 S sentences as healthy TTS audio, no pixels. Audio: Higgs v2 base, voices en_woman/en_man/belinda, all three per
+  sentence (507 clips, seed 1000 + index, `v1/tts_s.py` reusing `make_drive.py`), TTS input = spoken-form `norm`; kept if
+  whisper-large-v3 WER <= 0.10. Training target = the S row's raw_sentence (same as A1). Audio rows go through the shared
+  encoder's audio input (frontend_a -> encoder -> ctc_a / decoder.out_layer_a; `v1/patch_ft.py` -> `usr2_ft_v1.py`, video
+  rows unchanged); no audio augmentation. Everything else = A14 (init, 1,000 updates, augs on video rows, WiSE 0.75, seeds
+  1-3, visual-only decode on T, W-token errors, paired clip bootstrap 4,000 draws seed 20261115).
+  Step 0 sanity: greedy CTC through ctc_a of the init checkpoint on 60 Higgs s3_train drive clips; WER must be <= 25%,
+  else the audio branch is not usable from this init and V1 is reported as not runnable (no fallback init without asking).
+  Decision (G = A0 - A1 = 7 W errors at WiSE 0.75; recovery r = (A0 - A2) / G):
+  r >= 0.8 and A2 - A0 CI upper < 0 -> pixels not needed: next = in-home test of TTS-audio injection, no generator;
+  r < 0.5 -> a generator is justified (V2 = A13 step 1), only on Preyansh's go; otherwise report and ask.
+  Cap 6 GPU-h (TTS + 3 runs).
+  Outcome: sanity 0.58%; W errors A0 25 / A1 18 / A2 24, A2 - A0 -1 [-5, +2], r = 0.14 -> generator justified.
+- A16 V2 generator (A13 step 1 + G4) (2026-11-10, Preyansh: "yes v2"; loss reader: "current plan" = Auto-AVSR).
+  Frozen before generator training. Training pool = t2m2 pool gen_train minus V0 T and S clips minus clips with a word
+  lacking phone timings; 30 of those (random.Random(20261116)) held back as generator-val (monitoring only, never a gate
+  input). Generator (`t2m2/gen.py`): frozen conv autoencoder (96x96 grey devcrop <-> 8x12x12 latent, trained first on
+  the same frames); transformer (8 layers, d 384) maps per-frame phone id + position-in-phone + one reference frame
+  (lead-in frame of another clip of the same source) to latent residuals. Phone timings from the A13 CTC alignment;
+  at sampling time phone durations = per-phone median of training timings x U[0.9, 1.1], lead/tail = per-source median.
+  Losses: pixel L1 + latent L1 + 0.1 VGG16 relu2_2 perceptual + temporal-difference L1 + lam x CTC of frozen Auto-AVSR
+  LRS3 VSR (`vsr_trlrs2lrs3vox2avsp_base.pth`, reader != judge), lam ramps 0 -> 1 over steps 2,000-6,000. AE 30,000
+  steps batch 256; generator 20,000 steps batch 16 clips, lr 2e-4 cosine, seed 1, last checkpoint used.
+  G4 sets (`t2m2/phonemize.py`, CMUdict first pronunciation, g2p_en fallback): (a) 30 heldout30 sentences, (b) 100
+  DailyDialog sentences 3-10 words not in pool or any eval role (seed 20261117), (d) 169 V0 S sentences (W words never
+  shown to the generator). Thresholds unchanged from A13: readability = mean capped USR 2.0 Huge WER (beam 40) <= 0.372
+  on a, b and d; validity >= 0.98 on b; sharpness (median Laplacian var gen / real gen-train) >= 0.7; likeness medians
+  inside real p10..p90. Likeness instrument changed because FAN cannot run on 96x96 crops: a small CNN regressing the
+  MediaPipe aperture stored in the devcrop npz, trained on real gen-train frames and applied to real and generated clips
+  alike (`t2m2/g4.py`); range = p95-p5 aperture, speed = p95 |d aperture| x 25, sec/word = active span (speed > 0.25 x
+  real pooled p95) / words. Real heldout30 crops judged as reference. Stop rule: (a) > 0.6 -> close the synthetic-video
+  track. G4 PASS -> V3 (A0 + generated S clips, A14 scoring; pass CI upper < 0, >= 50% of G, beats A2), on Preyansh's go.
+  Cap 12 GPU-h for generator + G4.
+  Outcome (2026-11-11, jobs 22626703 + 22626706, ~0.8 GPU-h): G4 FAIL. Readability passes (a 0.142, b 0.190, d 0.142;
+  real heldout30 0.231), validity 1.00, but sharpness 0.50-0.52 < 0.7 and likeness out of band (speed ~1.6 vs real
+  p10 1.84; range at the low edge). Stop rule not fired. Report: t2m2/g4_report.md. Awaiting Preyansh's decision.
+
+- A17 V3 training test despite G4 FAIL (2026-11-11, Preyansh chose option 2: "2"). Deviation from A13/A16, which allowed
+  V3 only on a G4 pass; recorded before any V3 run. Arm A3 = v0_A0_train + 169 generated clips (G4 set d, generator
+  seed 1, one clip per V0 S sentence, same targets as the real S clips; `v3/v3_manifest.py`). Recipe, decode, seeds 1-3
+  and scoring exactly as A14 (`v3/v3_run.sbatch`, `v3/v3_score.py`). PASS = A3 - A0 CI upper < 0 AND recovery
+  (A0 - A3) / 7 >= 0.5 AND A3 W errors < A2 (24). PASS -> V4 in-home test only on Preyansh's go. FAIL -> close the
+  synthetic-video track (PLAN.md 3.3 item 2). Cap 4 GPU-h.
+  Outcome (2026-11-11, ~2.1 GPU-h): FAIL. W errors A0 25 / A1 18 / A2 24 / A3 22; A3 - A0 -3 [-7, 0]; recovery 0.43.
+  Descriptive a1.0: -7 [-14, -1], recovery 0.70. Results: v3/results.md.
+
+- A18 dose + replication of V3 (pre-registered 2026-11-11 before any A18 run; Preyansh approved "Yes, set up A18" in a
+  review session, which handed the design here). Question: does more generated video per new word close the gap to real
+  video? Same V0 split, recipe, decode, scorer as A14/A17; existing generator gen.pth, no retraining.
+  Seeds 4, 5, 6 only, analysed on their own (pooling with seeds 1-3 descriptive only).
+  Arms: A0; A1 (real S video); A3x1 = A0 + the same 169 generated S clips as V3; A3x5 = A0 + generated clips so every
+  W type (118) appears in >= 5 generated clips: the 169 S clips + DailyDialog sentences (t2m2/text/dd_pool.jsonl,
+  3-10 words, seeded 20261118 shuffle, scarcest W words first) containing the W word, generator sample seed 1; if a
+  W word runs out of DailyDialog sentences, re-sample its S sentence(s) with generator seed 2, 3, ...; counts per
+  source reported (`a18/select_report.json`, `a18/manifest_report.json`). Leak rule: an extra sentence is dropped if
+  its exact (lowercased) or normalised text equals any transcript in any role file under the patient splits
+  (`/scratch/th3482/Dysarthric_ASR/data/patients/splits/*/roles/*.jsonl`, eval roles included, read only for this
+  check), V0 T or val, or the pool. Outputs /scratch/pa2753/synvid/a18/; runs in v0/runs/{A0,A1,A3x1,A3x5}/seed{4,5,6}.
+  Primary: A3x5 - A0, W-token errors on T, WiSE 0.75, seeds 4-6 summed, paired clip bootstrap 4,000 draws (seed
+  20261115); "helps" = CI upper < 0. Secondary: A3x1 - A0 (V3 replication), A3x5 - A3x1 (dose), A3x5 - A1 (vs real).
+  Descriptive: a1.0, all-token T WER, errors on other unseen T tokens (not in W, not in A0 train text; harm check,
+  since A3x5 adds about as many synthetic rows as real under the same 1,000 updates).
+  Frozen reading: track alive if primary helps AND A3x5 <= A3x1 errors; close if A3x5 - A0 CI upper >= 0 AND A3x5
+  is no better than A3x1; anything else report and ask. No V4 without Preyansh's go. Cap 10 GPU-h + generation.
+  Code: `a18/a18_select.py`, `a18/a18_gen.sbatch`, `a18/a18_manifest.py`, `a18/a18_run.sbatch` (v3_run with ARM/MAN),
+  `v0/v0_run.sbatch` (A0/A1), `a18/a18_score.py`.
+  Outcome (2026-11-11, ~4 GPU-h): CLOSE. W errors A0 23 / A1 18 / A3x1 18 / A3x5 18; A3x5 - A0 -5 [-12, 0];
+  A3x5 - A3x1 0 [-3, 3] (no dose effect); A1 - A0 also -5 [-12, 0]. Pooled seeds 1-6 descriptive: A0 48 / A1 36 /
+  A3x1 40. Results: a18/results.md.
 
 ## 11. Files
 | file | step |
@@ -238,3 +324,8 @@ together, fine-tune included, heading over about 20 GPU-hours.
 | `t2m2/pool.py`, `t2m2/devcrop.sbatch`, `t2m2/align_npz.py`, `t2m2/align.sbatch`, `t2m2/stats.py`, `t2m2/g2p_check.py`, `t2m2/step0.md` | A13 step 0 |
 | `phase3b_audio.py`, `phase3b_arm.sbatch` | Phase 3b arms (A10); `gate_vid.py --root .../phase3b` scores them |
 | `build_env_*.sbatch`, `fetch_text.sbatch`, `p1_gpu_*.sbatch`, `SUBMIT.md` | cluster setup and Phase 1 jobs |
+| `v0/v0_split.py`, `v0/v0_run.sbatch`, `v0/v0_score.py` | A14 real-video oracle V0 |
+| `v1/audio_sanity.py`, `v1/patch_ft.py`, `v1/tts_s.py`, `v1/tts.sbatch`, `v1/v1_run.sbatch`, `v1/v1_score.py` | A15 text/audio-exposure control V1 |
+| `a18/a18_select.py`, `a18/a18_gen.sbatch`, `a18/a18_manifest.py`, `a18/a18_run.sbatch`, `a18/a18_score.py` | A18 dose + replication |
+| `v3/v3_manifest.py`, `v3/v3_run.sbatch`, `v3/v3_score.py` | A17 V3 training test |
+| `t2m2/gen.py`, `t2m2/gen.sbatch`, `t2m2/phonemize.py`, `t2m2/g4.py`, `t2m2/g4.sbatch` | A16 V2 generator and gate G4 |

@@ -435,7 +435,8 @@ Each one is grounded in a gap the page states or a result it shows.
    (a) shallow fusion with an n-gram LM over the patient's sentence material plus the 10k corpus, (b) Whisper prompt /
    keyword biasing with a caregiver word list, (c) N-best rescoring with a small LLM. OOV is the target; test30 must not
    get worse. Bar: semg1 OOV < 10.0, semg2 OOV < 2.1. 5 seeds of the base model, paired bootstrap.
-2. **Audio-conditioned synthetic video for semg3 (~1-2 GPU-days).** Page: synthetic video "so far not successful as they
+2. **CLOSED 2026-11-11, pre-registered FAIL (borderline), see 4.3 and `asr_aug/synvid/v3/results.md`.** Audio-driven lip sync (LatentSync/KeySync/fine-tuned) unreadable (judge 0.84-1.00); splicing 0.87; real-video oracle V0 passes (W errors 25 -> 18); TTS audio does nothing (24); trained text-to-mouth generator reads well (0.14-0.19) but fails sharpness/likeness, and in training gives 25 -> 22, CI [-7, 0] (a1.0 descriptive 27 -> 20). Ceiling ~4-5 of 81 in-home errors. ~10 GPU-h total.
+   Original item: **Audio-conditioned synthetic video for semg3 (~1-2 GPU-days).** Page: synthetic video "so far not successful as they
    need audio as conditions, which semg3 doesn't have". We have Higgs TTS: synthesize audio for new sentences (generic or
    semg1/semg2-adapted voice, or a voice matched to semg3's mouth timing), drive a lip-sync generator on semg3 face crops,
    add the clips to USR 2.0 training. Bar: semg3 OOV50 < 4.24. Gate first: generated mouth crops must be readable by the
@@ -599,3 +600,96 @@ Val-selected ckpt oov WER %: N 31.0, NF 25.1, NS 26.5, ON 27.4, ONF 26.4, ONS 21
 Primary (Holm over 2): NF-N -5.9pp [-12.7,+0.9] Holm p=0.17; ONF-ON -1.1pp [-7.0,+5.2] Holm p=0.72. Neither "helps" (CI upper not < 0).
 Secondary: NF-NS -1.4 (ns); ONF-ONS +4.9 [-0.6,+11.1] (targeted text not better than generic; trends worse). Last ckpt: NF-N -0.2, ONF-ON +0.5, ONF-ONS +4.8.
 Verdict: oov-sentence text from the other fold does not help beyond noise; generic synthetic (ONS) is the best arm.
+
+## 4. semg3 synthetic video: audit, literature review and plan (2026-11-10; responds to "how can synthetic video improve semg3 WER")
+
+**Status 2026-11-11:** V0 PASS (A1 - A0 = -7 [-15, -1] W errors, `v0/results.md`); V1 r = 0.14, generator justified
+(`v1/results.md`); V2 G4 FAIL: readability passes (a 0.142, b 0.190, d 0.142 vs real 0.231) but sharpness 0.50-0.52 < 0.7
+and likeness speed ~1.6 < real p10 1.84; stop rule not fired (`t2m2/g4_report.md`, README A14-A16). V3 run despite the G4 fail (A17, deviation): FAIL, W errors A0 25 / A1 18 / A2 24 /
+A3 22, A3 - A0 = -3 [-7, 0], recovery 0.43 < 0.5 (descriptive a1.0: -7 [-14, -1], 0.70; `v3/results.md`). A17 rule on
+fail = close the track; 3.3 item 2 not yet rewritten, V4 not run. The text below is the plan as written on 2026-11-10, before any run. It supersedes the order of work in 3.3 item 2 only; the frozen rules in
+`asr_aug/synvid/README.md` (A1-A13) stay as they are, and every gate threshold below is either already frozen there
+or stricter.
+A18 (dose + replication, seeds 4-6): CLOSE per frozen rule. A0 23 / A1 18 / A3x1 18 / A3x5 18; A3x5 - A0 -5 [-12, 0];
+dose 0 [-3, 3]; real-video oracle also -5 [-12, 0]. Pooled seeds 1-6: generated video ~2/3 of real gain, test too small
+to confirm; ceiling ~4-5 of 81 in-home errors. Synthetic-video track closed (`asr_aug/synvid/a18/results.md`).
+
+### 4.1 Audit: where semg3 stands (all numbers from existing reports)
+- **Target.** Deployed model = Tianyu's F1 v1.8 (USR 2.0 Huge, visual only, soup of 4 + WiSE 0.75) with the Qwen chain.
+  In-home 193 clips / 1,116 words: F1 alone 112 errors (10.04 %), chain 81 (7.26 %). Offline: OOV50 3.51 (8/228),
+  s3ov test53 6.65 (23/346), s3_test 0.59 (1/169). Offline sets have almost no room left; the in-home set is the target.
+- **What a generator can reach.** Of the 81 chain errors, 24 are on words unseen in the fold's training text. Only 16
+  of those are on words with no real video anywhere in the 912-clip pool (`t2m2/step0.md`); the other 8 already have
+  real video. Chain error rate on unseen tokens: 6/97 when F1 trained on the word in real video, 16/110 when no video
+  exists. If synthetic clips were as good as real ones, expected saving is about 9 errors (81 -> ~72, 7.26 -> ~6.5 %).
+  The hard ceiling is 16 errors. The other ~57 errors (seen words, final-word drops such as "percent" 0/8) are not
+  reachable by new-word video.
+- **Pixel routes tried, all failed the readability gate (judge USR 2.0 Huge, bar 0.372, real clips 0.07-0.27):**
+  LatentSync 1.6 zero-shot 0.871; KeySync 0.995 (leak 1.00); LatentSync fine-tuned on 240 clips 0.839 (0.433 on its own
+  training sentences); audio-rate arms 0.883 / 0.925; diphone/word splicing 0.909 (50-word inventory) and 0.868
+  (584-word inventory), 0.870 on held-out open-vocab sentences. Sharpness 0.64 of real for every diffusion arm.
+  The A12 stop rule fired ("recommend closing the synthetic track"); A13 (targeted text-to-mouth) was opened after it.
+- **A13 step 0 is finished** (pool 912 clips = 46 min, 882 for generator training, crops 912/912, timings 912/912,
+  text pool 48,838 sentences). Step 1 (train the generator) is waiting for a go.
+- **Decode-only bars any generator must beat:** F1 105/1116 (phrase bonus, not significant), chain 81/1116 (`pbias/results.md`).
+- **Related nulls:** synthetic audio for semg1/semg2 (H, H2, re-voicing), +298 real v3.4 clips gave no in-home gain,
+  date-split home data gave no gain; only home data x4 with spoken-form targets moved in-home errors (seed-fragile).
+- **Gaps in the existing plans.** (1) No measurement of how much *real* video of a new word helps, so the ceiling
+  above is descriptive, not tested. (2) No control for text exposure: a synthetic clip also shows the decoder the
+  new word, so a gain could come from text, not pixels. (3) Gate G4 tests readability by a lip reader, which the
+  generator's own lip-reader loss optimises; it does not test whether the clips teach the patient's articulation.
+  (4) G4 has no set of sentences whose words are absent from generator training, which is the only case that matters.
+  (5) `PLAN.md` 3.3 item 2 still shows the original text.
+
+### 4.2 Independent literature review (three searches, 2026-11-10; "sec." = number seen only in a secondary source)
+- **Readable generated mouths come from a lip-reading loss, not from sync.** TalkLip (2303.17480, LRS2, AV-HuBERT
+  reader): real 23.82 WER, Wav2Lip 82.06, TalkLip 23.43; the same model without the lip-reading loss 103.57. SyncDiff
+  (2503.13371): Wav2Lip 90.67, SadTalker 110.64, DiffTalk 114.34, SyncDiff 67.40. No 2024-2026 diffusion lip-sync paper
+  (LatentSync, KeySync, MuseTalk, OmniSync, Sonic) reports a lip-reading WER; LatentSync's own paper lists inpainting
+  shortcuts and VAE loss of lip detail. Our 0.84-0.99 results match the published pattern.
+- **Text-driven generation:** Text2Lip (2508.02362, GRID): reader WER 39.43 full model, 52.64 text only, TTS-driven 44.29
+  vs real-audio-driven 39.48. No code. DualLip (2009.05784) is GRID-scale. No person-specific NeRF/Gaussian method
+  (SyncTalk++, InsTaG, MimicTalk) reports readability; lip accuracy is the first thing they lose with little video (2511.07940).
+- **Synthetic video as VSR training data:** SynthVSR (2303.17200, sec.): 438 h LRS3 36.7 -> 27.9 with 3,652 h synthetic,
+  from-scratch models. LipGen (2501.04204): +0.2 on LRW from synthetic clips alone. Buitrago et al. (2609.31961, AV-HuBERT
+  Large, Spanish): VSR 90.4 -> 68.0 mixed, but sizes not matched and synthetic-only 97.4; Catalan (2603.08249) video-only
+  105 %, synthetic mouth opening less varied than real. Gains shrink as the real baseline gets stronger.
+- **Not found anywhere:** synthetic video of one specific speaker used for lip reading; any measured gain on unseen
+  words; any patient / laryngectomy case; training VSR on synthetic landmarks or features. A positive result here
+  would be new, and the prior for it is low.
+- **Without pixels:** u-HuBERT (2207.07036) reports that audio-only fine-tuning of a shared audio-visual encoder
+  transfers to visual input; USR 2.0 (2602.19316) is such an encoder. Text injection (JOIST 2210.07353, 4-14 % relative on
+  rare words, sec.) is untested for lip reading. Personalised lip reading (2409.00986): 47.3 -> 40.9 with prompts + LoRA,
+  40.0 full fine-tune, no unseen-word analysis.
+- **What it changes:** A13's frozen lip-reader loss is the one ingredient with published support, so A13 is the only
+  generator worth one more attempt. The loss also creates the risk in gap (3): TalkLip's clips read *better* than real
+  video because the mouths become "more standard", i.e. they carry the reader's prior, not the speaker's.
+
+### 4.3 Plan (ordered; stop and report at each DECISION)
+Split used by V0-V3, built once from the 912-clip pool, no eval role touched: pick word types W that occur in 2-6 pool
+clips and are outside the s3 50-word set; T = ~100 clips containing W words (test), S = the other pool clips
+containing W words (support). Metric: word errors on W tokens in T, model alone, F1 recipe (1,000 updates), seeds 1-3,
+paired clip bootstrap. Split seed and W list are frozen before any training. Cost per F1 run is unmeasured (estimate
+1-2 GPU-h); V0 measures it.
+
+| step | what it tests | expected effect | cost | pass / fail |
+|---|---|---|---|---|
+| **V0. Real-video oracle** | Arms A0 = pool - T - S, A1 = pool - T. Does real video of a new word lower errors on that word? Also reproduces F1 training with our own crops. | A1 below A0 on W tokens; size unknown (descriptive 6 % vs 15 %) | 6 runs, ~6-12 GPU-h | Pass: A1 - A0 CI upper < 0. Fail: **close the synthetic-video track**, since a perfect generator cannot beat real video. DECISION |
+| **V1. Text-exposure control** | A2 = A0 + the S sentences as Higgs TTS audio through the audio input of the shared encoder (if `usr2_ft.py` exposes it; otherwise report and skip). How much of the oracle gap needs no pixels? | 0-50 % of the gap (u-HuBERT-style transfer; untested for lip reading) | 3 runs, ~3-6 GPU-h + TTS < 1 | No pass/fail; fixes the bar V3 must beat. If A2 recovers >= 80 % of the gap, pixels are not needed: report. DECISION |
+| **V2. Generator (A13 step 1 + gate G4)** | Text-to-mouth generator with frozen lip-reader loss, trained on pool - T - S - heldout30. Loss reader = Auto-AVSR LRS3 VSR (different family from the judge). | G4 pass chance low (every earlier route failed; lit supports only this loss) | 8-12 GPU-h + G4 < 1 | G4 as frozen (readability <= 0.372 on held-out 30 and on 100 new sentences, validity >= 0.98, sharpness >= 0.7, likeness in band) **plus new (d):** readability <= 0.372 on the S sentences, whose W words the generator never saw. Stop rule as frozen (held-out > 0.6). Fail: close. DECISION |
+| **V3. Does it teach?** | A3 = A0 + generated clips of the S sentences. Fraction of the V0 gap recovered by synthetic instead of real video. | 0-50 % of the gap | 3 runs, ~3-6 GPU-h | Pass: A3 - A0 CI upper < 0, A3 recovers >= 50 % of the A1 - A0 gap, and A3 beats A2. Fail: close. DECISION |
+| **V4. In-home training test (A13 step 3, as frozen)** | Retrain generator on all 882 clips; R vs R + S (<= 500 clips, <= 50 % of real, greedy new-word text), 3 seeds, chain decode, 193 in-home clips. | Best case -9 errors (81 -> ~72); likely 0 to -5 | generator 8-12 + 6 runs + chain decode, ~20-30 GPU-h | Pass: pooled in-home word errors R+S - R CI upper < 0 and below 81 with the chain; offline sets not worse. Only on a go. |
+
+- Total if every step runs: about 45-70 GPU-h; the first decision (V0) costs 6-12.
+- Closing rule: on any fail, write the outcome into 3.3 item 2 in the style of the other items and stop. The levers
+  with support for the remaining ~57 errors are outside this track: more home data with spoken-form targets, and
+  confidence-filtered self-training on unlabelled in-home clips (USR 2.0 pseudo-labelling).
+- Not planned, with reason: more zero-shot lip-sync models (none reports readability; four failures), NeRF/Gaussian
+  person-specific heads (no readability evidence), more splicing (two failures, coarticulation), adding a lip-reading
+  loss to LatentSync (VAE decode in the loop, training code unconfirmed).
+
+### 4.4 Open questions before V0
+1. The A12 stop rule recommended closing the track. Continue under A13 with V0-V4 recorded as amendment A14?
+2. Primary target stays the in-home 193 clips with the chain (A13), not the offline OOV50 4.24 bar?
+3. May the synthetic text set include number / percent spoken forms (the "percent" 0/8 case), given that selection
+   may not use in-home words?
