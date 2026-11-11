@@ -613,6 +613,14 @@ or stricter.
 A18 (dose + replication, seeds 4-6): CLOSE per frozen rule. A0 23 / A1 18 / A3x1 18 / A3x5 18; A3x5 - A0 -5 [-12, 0];
 dose 0 [-3, 3]; real-video oracle also -5 [-12, 0]. Pooled seeds 1-6: generated video ~2/3 of real gain, test too small
 to confirm; ceiling ~4-5 of 81 in-home errors. Synthetic-video track closed (`asr_aug/synvid/a18/results.md`).
+In-home error breakdown (0 GPU, `asr_aug/synvid/errbreak/results.md`): 81 chain errors = 10 spoken-form / 12 final / 11
+unseen (none with video) / 24 seen sub / 24 del-ins; 39-48 in the 20-best; Tianyu's rh4sp fixes all 8 percent clips.
+rh4sp soup through the deployed chain (0 GPU): 84 vs 81 (+3 [-20, 27]); percent 8/8 but 18 clips fixed / 18 broken;
+15 other Tianyu chain variants 75-86, none clearly better.
+"percent" post-rule on chain (0 GPU, in-sample): R1 primary 80 (-1 [-3, 0]); R2 descriptive 74 (-7 [-13, -3], 7 fixed / 0 broken);
+fires 0 on 5 non-home sets (weak check). Needs new home data to confirm (`asr_aug/synvid/errbreak/results.md`).
+Tianyu personal-LM re-ranker (plm2, nested CV): rh4sp s1 app45 70 vs App 84 (-14 [-36, 7]); soup 83 (-1 [-25, 23]); none
+clearly better, seed noise ~ effect. Re-ranker lever parked until new home data.
 
 ### 4.1 Audit: where semg3 stands (all numbers from existing reports)
 - **Target.** Deployed model = Tianyu's F1 v1.8 (USR 2.0 Huge, visual only, soup of 4 + WiSE 0.75) with the Qwen chain.
